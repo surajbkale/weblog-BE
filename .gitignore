@@ -1,0 +1,75 @@
+HELP.md
+target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Spring Boot - Secrets & Environment ###
+# Profile-specific configs (DB creds, OAuth2 secrets, Redis passwords etc.)
+application-local.properties
+application-local.yml
+application-dev.properties
+application-dev.yml
+application-prod.properties
+application-prod.yml
+application-secrets.properties
+application-secrets.yml
+# Catch-all for any profile-specific configs — keep base application.properties only
+# Uncomment the lines below if you move ALL config to profiles:
+# application-*.properties
+# application-*.yml
+
+# Environment variable files
+.env
+.env.*
+!.env.example
+
+### Logs ###
+*.log
+logs/
+spring-shell.log
+
+### Compiled Artifacts (outside target/) ###
+*.jar
+*.war
+*.ear
+*.class
+
+### Merge & Patch Leftovers ###
+*.orig
+*.rej
+
+### OS Specific ###
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
