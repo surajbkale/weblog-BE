@@ -1,0 +1,37 @@
+package com.weblogs.blog.config;
+
+import lombok.Getter;
+import lombok.Setter;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.stereotype.Component;
+
+@Getter
+@Setter
+@Component
+@ConfigurationProperties(prefix = "app")
+public class AppProperties {
+
+    private String frontendUrl = "http://localhost:3000";
+
+    private Mail mail = new Mail();
+    private RateLimit rateLimit = new RateLimit();
+
+    @Getter
+    @Setter
+    public static class Mail {
+        private String from = "noreply@weblogs.com";
+    }
+
+    @Getter
+    @Setter
+    public static class RateLimit {
+        private Login login = new Login();
+
+        @Getter
+        @Setter
+        public static class Login {
+            private int maxAttempts = 5;
+            private int windowSeconds = 60;
+        }
+    }
+}
