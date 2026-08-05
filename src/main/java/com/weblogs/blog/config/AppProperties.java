@@ -15,6 +15,7 @@ public class AppProperties {
 
     private Mail mail = new Mail();
     private RateLimit rateLimit = new RateLimit();
+    private Cloudinary cloudinary = new Cloudinary();
 
     @Getter
     @Setter
@@ -33,5 +34,13 @@ public class AppProperties {
             private int maxAttempts = 5;
             private int windowSeconds = 60;
         }
+    }
+
+    @Getter
+    @Setter
+    public static class Cloudinary {
+        private String cloudName;
+        private String apiKey;
+        private String apiSecret;
     }
 }

@@ -52,6 +52,14 @@ public class SecurityConfig {
                     "/oauth2/**",
                     "/login/oauth2/**"
                 ).permitAll()
+                // Public read-only content endpoints (JWT optional — filter passes through)
+                .requestMatchers(org.springframework.http.HttpMethod.GET,
+                    "/api/v1/posts",
+                    "/api/v1/posts/{slug}",
+                    "/api/v1/posts/*/comments",
+                    "/api/v1/categories",
+                    "/api/v1/tags"
+                ).permitAll()
                 .anyRequest().authenticated()
             )
             .oauth2Login(oauth2 -> oauth2

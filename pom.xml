@@ -18,7 +18,11 @@
 	<properties>
 		<java.version>17</java.version>
 		<jjwt.version>0.12.6</jjwt.version>
-		<testcontainers.version>1.20.4</testcontainers.version>
+		<testcontainers.version>1.21.0</testcontainers.version>
+		<!-- Pin docker-java so the Unix socket client does NOT probe with /v1.32/version.
+		     docker-java ≥ 3.5 fixed the handshake to use /version (undocumented version),
+		     which is accepted by Docker Engine ≥ 1.40. -->
+		<docker-java.version>3.5.0</docker-java.version>
 	</properties>
 
 	<dependencyManagement>
@@ -29,6 +33,18 @@
 				<version>${testcontainers.version}</version>
 				<type>pom</type>
 				<scope>import</scope>
+			</dependency>
+			<!-- Override docker-java to ≥ 3.5 so the Unix socket handshake does NOT
+			     send /v1.32/version (rejected by Docker Engine min-API 1.40+). -->
+			<dependency>
+				<groupId>com.github.docker-java</groupId>
+				<artifactId>docker-java-api</artifactId>
+				<version>${docker-java.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.github.docker-java</groupId>
+				<artifactId>docker-java-transport-zerodep</artifactId>
+				<version>${docker-java.version}</version>
 			</dependency>
 		</dependencies>
 	</dependencyManagement>
@@ -152,6 +168,25 @@
 			<artifactId>postgresql</artifactId>
 			<scope>test</scope>
 		</dependency>
+
+		<!-- ===== Cloudinary (image uploads) ===== -->
+		<dependency>
+			<groupId>com.cloudinary</groupId>
+			<artifactId>cloudinary-http5</artifactId>
+			<version>2.0.0</version>
+		</dependency>
+
+		<!-- ===== .env file support (dev convenience — no-ops if .env absent) ===== -->
+<!--		<dependency>-->
+<!--			<groupId>me.paulschwarz</groupId>-->
+<!--			<artifactId>spring-dotenv</artifactId>-->
+<!--			<version>4.0.0</version>-->
+<!--		</dependency>-->
+		<dependency>
+			<groupId>io.github.cdimascio</groupId>
+			<artifactId>dotenv-java</artifactId>
+			<version>3.2.0</version>
+		</dependency>
 	</dependencies>
 
 	<build>
@@ -178,6 +213,29 @@
 							<artifactId>lombok</artifactId>
 						</path>
 					</annotationProcessorPaths>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<!-- Pass the Docker socket to the test JVM so Testcontainers
+					     can connect even when DOCKER_HOST is not set in the shell. -->
+					<environmentVariables>
+						<DOCKER_HOST>unix:///var/run/docker.sock</DOCKER_HOST>
+						<TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE>/var/run/docker.sock</TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE>
+						<!-- Override any shell-level DOCKER_API_VERSION (e.g. 1.32) that
+						     would cause docker-java to request /v1.32/... which is below
+						     the daemon's minimum supported API version of 1.40. -->
+						<DOCKER_API_VERSION>1.47</DOCKER_API_VERSION>
+					</environmentVariables>
+					<systemPropertyVariables>
+						<!-- Force the Unix socket strategy — skip TLS and docker-machine probes -->
+						<testcontainers.dockerclient.strategy>org.testcontainers.dockerclient.UnixSocketClientProviderStrategy</testcontainers.dockerclient.strategy>
+					</systemPropertyVariables>
+					<!-- Pass DOCKER_API_VERSION as JVM arg so docker-java's DefaultDockerClientConfig
+					     picks it up at class-init time, before reading from System.getenv() -->
+					<argLine>-DDOCKER_API_VERSION=1.47</argLine>
 				</configuration>
 			</plugin>
 		</plugins>

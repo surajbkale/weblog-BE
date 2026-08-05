@@ -75,6 +75,12 @@ spring:
             enable: true
             required: true
 
+  # ── Multipart (media uploads up to 5 MB) ────────────────────────────────────
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
+
 # ── JWT ─────────────────────────────────────────────────────────────────────
 jwt:
   # Generate with: openssl rand -base64 64
@@ -91,6 +97,11 @@ app:
     login:
       max-attempts: ${RATE_LIMIT_LOGIN_MAX:5}
       window-seconds: ${RATE_LIMIT_LOGIN_WINDOW:60}
+  cloudinary:
+    cloud-name: ${CLOUDINARY_CLOUD_NAME:}
+    api-key: ${CLOUDINARY_API_KEY:}
+    api-secret: ${CLOUDINARY_API_SECRET:}
+
 
 # ── Logging ─────────────────────────────────────────────────────────────────
 logging:
