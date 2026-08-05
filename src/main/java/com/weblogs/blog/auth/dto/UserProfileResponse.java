@@ -4,6 +4,7 @@ import com.weblogs.blog.user.AuthProvider;
 import com.weblogs.blog.user.Role;
 import com.weblogs.blog.user.User;
 
+import java.time.Instant;
 import java.util.UUID;
 
 public record UserProfileResponse(
@@ -11,19 +12,31 @@ public record UserProfileResponse(
         String email,
         String displayName,
         String avatarUrl,
+        String bio,
         Role role,
         AuthProvider authProvider,
-        boolean emailVerified
+        boolean emailVerified,
+        long publishedPostCount,
+        Instant memberSince
 ) {
-    public static UserProfileResponse from(User user) {
+    /** Used by UserController — requires post count fetched separately. */
+    public static UserProfileResponse from(User user, long publishedPostCount) {
         return new UserProfileResponse(
                 user.getId(),
                 user.getEmail(),
                 user.getDisplayName(),
                 user.getAvatarUrl(),
+                user.getBio(),
                 user.getRole(),
                 user.getAuthProvider(),
-                user.isEmailVerified()
+                user.isEmailVerified(),
+                publishedPostCount,
+                user.getCreatedAt()
         );
+    }
+
+    /** Convenience overload for callers that don't need post count (e.g. auth responses). */
+    public static UserProfileResponse from(User user) {
+        return from(user, 0L);
     }
 }
