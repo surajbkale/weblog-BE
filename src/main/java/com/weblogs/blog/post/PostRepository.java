@@ -1,0 +1,88 @@
+package com.weblogs.blog.post;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import java.util.Optional;
+import java.util.UUID;
+
+public interface PostRepository extends JpaRepository<Post, UUID> {
+
+    Optional<Post> findBySlugAndDeletedFalse(String slug);
+
+    boolean existsBySlug(String slug);
+
+    // ── Current user's own posts (all statuses) ───────────────────────────────
+
+    @Query("""
+            SELECT p FROM Post p
+            WHERE p.author.id = :authorId
+              AND p.deleted   = false
+            ORDER BY p.createdAt DESC
+            """)
+    Page<Post> findByAuthorId(@Param("authorId") UUID authorId, Pageable pageable);
+
+    // ── Public list: published + not deleted ──────────────────────────────────
+    // Supports optional category slug, tag slug, authorId, and full-text search.
+    // When q is provided we rank by ts_rank; otherwise order by publishedAt DESC.
+
+    @Query(value = """
+            SELECT p.*
+            FROM   posts p
+            JOIN   users u ON u.id = p.author_id
+            WHERE  p.deleted  = false
+              AND  p.status   = 'PUBLISHED'
+              AND  (:categorySlug IS NULL OR EXISTS (
+                       SELECT 1 FROM post_categories pc
+                       JOIN   categories c ON c.id = pc.category_id
+                       WHERE  pc.post_id = p.id AND c.slug = :categorySlug))
+              AND  (:tagSlug IS NULL OR EXISTS (
+                       SELECT 1 FROM post_tags pt
+                       JOIN   tags t ON t.id = pt.tag_id
+                       WHERE  pt.post_id = p.id AND t.slug = :tagSlug))
+              AND  (:authorId IS NULL OR p.author_id = CAST(:authorId AS uuid))
+              AND  (:q IS NULL OR p.search_vector @@ plainto_tsquery('english', :q))
+            ORDER BY
+                CASE WHEN :sort = 'mostLiked' THEN
+                    (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id)
+                END DESC NULLS LAST,
+                CASE WHEN :sort != 'mostLiked' OR :sort IS NULL THEN
+                    p.published_at
+                END DESC NULLS LAST
+            """,
+            countQuery = """
+            SELECT COUNT(p.id)
+            FROM   posts p
+            WHERE  p.deleted  = false
+              AND  p.status   = 'PUBLISHED'
+              AND  (:categorySlug IS NULL OR EXISTS (
+                       SELECT 1 FROM post_categories pc
+                       JOIN   categories c ON c.id = pc.category_id
+                       WHERE  pc.post_id = p.id AND c.slug = :categorySlug))
+              AND  (:tagSlug IS NULL OR EXISTS (
+                       SELECT 1 FROM post_tags pt
+                       JOIN   tags t ON t.id = pt.tag_id
+                       WHERE  pt.post_id = p.id AND t.slug = :tagSlug))
+              AND  (:authorId IS NULL OR p.author_id = CAST(:authorId AS uuid))
+              AND  (:q IS NULL OR p.search_vector @@ plainto_tsquery('english', :q))
+            """,
+            nativeQuery = true)
+    Page<Post> findPublished(
+            @Param("categorySlug") String categorySlug,
+            @Param("tagSlug")      String tagSlug,
+            @Param("authorId")     String authorId,
+            @Param("q")            String q,
+            @Param("sort")         String sort,
+            Pageable pageable);
+
+    // ── Counts (used to populate likeCount / commentCount on responses) ────────
+
+    @Query("SELECT COUNT(l) FROM Like l WHERE l.post.id = :postId")
+    long countLikesByPostId(@Param("postId") UUID postId);
+
+    @Query("SELECT COUNT(c) FROM Comment c WHERE c.post.id = :postId AND c.deleted = false")
+    long countCommentsByPostId(@Param("postId") UUID postId);
+}
