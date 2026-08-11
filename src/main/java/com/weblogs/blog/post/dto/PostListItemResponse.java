@@ -25,6 +25,7 @@ public record PostListItemResponse(
         List<TagResponse>      tags,
         long   likeCount,
         long   commentCount,
+        long   viewCount,
         boolean likedByCurrentUser,
         Instant publishedAt,
         Instant createdAt
@@ -45,6 +46,7 @@ public record PostListItemResponse(
                 post.getTags().stream().map(TagResponse::from).toList(),
                 likeCount,
                 commentCount,
+                post.getViewCount(),
                 likedByCurrentUser,
                 post.getPublishedAt(),
                 post.getCreatedAt()

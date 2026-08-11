@@ -10,6 +10,7 @@ import com.weblogs.blog.like.LikeRepository;
 import com.weblogs.blog.post.dto.*;
 import com.weblogs.blog.tag.Tag;
 import com.weblogs.blog.tag.TagRepository;
+import com.weblogs.blog.tag.TagService;
 import com.weblogs.blog.user.User;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +33,7 @@ public class PostService {
     private final PostRepository       postRepository;
     private final CategoryRepository   categoryRepository;
     private final TagRepository        tagRepository;
+    private final TagService           tagService;
     private final LikeRepository       likeRepository;
     private final AuthorizationHelper  authorizationHelper;
     private final CacheService         cacheService;
@@ -220,7 +222,7 @@ public class PostService {
                 return new PostResponse(hit.id(), hit.title(), hit.slug(), hit.content(),
                         hit.excerpt(), hit.coverImageUrl(), hit.status(), hit.author(),
                         hit.categories(), hit.tags(), hit.likeCount(), hit.commentCount(),
-                        liked, hit.publishedAt(), hit.createdAt());
+                        hit.viewCount(), liked, hit.publishedAt(), hit.createdAt());
             }
             return hit;
         }
@@ -253,7 +255,7 @@ public class PostService {
                 return new PostResponse(base.id(), base.title(), base.slug(), base.content(),
                         base.excerpt(), base.coverImageUrl(), base.status(), base.author(),
                         base.categories(), base.tags(), base.likeCount(), base.commentCount(),
-                        true, base.publishedAt(), base.createdAt());
+                        base.viewCount(), true, base.publishedAt(), base.createdAt());
             }
         }
         return base;
@@ -341,19 +343,29 @@ public class PostService {
     /**
      * Resolves tag names to Tag entities. If a tag doesn't exist yet, it is created
      * automatically. This is intentional: tags are free-form (unlike categories).
+     * When a new tag is persisted, the {@code tags:all} cache is evicted so that
+     * the next list request reflects the newly created tag.
      */
     private Set<Tag> resolveOrCreateTags(List<String> tagNames) {
         if (tagNames == null || tagNames.isEmpty()) return new LinkedHashSet<>();
         Set<Tag> result = new LinkedHashSet<>();
+        boolean newTagCreated = false;
         for (String rawName : tagNames) {
             String name = rawName.strip();
+            boolean existed = tagRepository.findByName(name).isPresent();
             Tag tag = tagRepository.findByName(name).orElseGet(() -> {
                 String slug = name.toLowerCase()
                         .replaceAll("[^a-z0-9\\s-]", "")
                         .replaceAll("[\\s]+", "-");
                 return tagRepository.save(Tag.builder().name(name).slug(slug).build());
             });
+            if (!existed) {
+                newTagCreated = true;
+            }
             result.add(tag);
+        }
+        if (newTagCreated) {
+            tagService.evictTagCache();
         }
         return result;
     }
