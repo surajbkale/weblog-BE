@@ -97,34 +97,42 @@ public class FeedController {
      * GET /sitemap.xml
      *
      * <p>Returns an XML Sitemap 0.9 document containing ALL published, non-deleted posts.
-     * No pagination — the sitemap must be complete so search engines can index everything.
+     * Posts are fetched in pages of {@value #SITEMAP_PAGE_SIZE} to avoid loading the
+     * entire table into JVM heap at once (prevents OOM on large blogs).
      * For very large blogs (&gt;50 000 posts), this should be split into a sitemap index.
      */
+    private static final int SITEMAP_PAGE_SIZE = 1_000;
+
     @GetMapping(value = "/sitemap.xml", produces = MediaType.APPLICATION_XML_VALUE + ";charset=UTF-8")
     @Transactional(readOnly = true)
     public String sitemap() {
         String frontendUrl = appProperties.getFrontendUrl();
 
-        // Fetch all published posts — no limit for sitemap completeness
-        List<Post> posts = postRepository.findLatestPublished(PageRequest.of(0, Integer.MAX_VALUE));
-
         StringBuilder sb = new StringBuilder(8192);
         sb.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
           .append("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
 
-        for (Post post : posts) {
-            String loc     = frontendUrl + "/posts/" + post.getSlug();
-            String lastmod = post.getUpdatedAt() != null
-                    ? ZonedDateTime.ofInstant(post.getUpdatedAt(), ZoneOffset.UTC).format(ISO_DATE)
-                    : ZonedDateTime.ofInstant(post.getCreatedAt(), ZoneOffset.UTC).format(ISO_DATE);
+        // Paginate through all published posts to avoid a single massive heap allocation
+        int pageNumber = 0;
+        List<Post> chunk;
+        do {
+            chunk = postRepository.findLatestPublished(
+                    PageRequest.of(pageNumber++, SITEMAP_PAGE_SIZE));
 
-            sb.append("  <url>\n")
-              .append("    <loc>").append(escapeXml(loc)).append("</loc>\n")
-              .append("    <lastmod>").append(lastmod).append("</lastmod>\n")
-              .append("    <changefreq>weekly</changefreq>\n")
-              .append("    <priority>0.8</priority>\n")
-              .append("  </url>\n");
-        }
+            for (Post post : chunk) {
+                String loc     = frontendUrl + "/posts/" + post.getSlug();
+                String lastmod = post.getUpdatedAt() != null
+                        ? ZonedDateTime.ofInstant(post.getUpdatedAt(), ZoneOffset.UTC).format(ISO_DATE)
+                        : ZonedDateTime.ofInstant(post.getCreatedAt(), ZoneOffset.UTC).format(ISO_DATE);
+
+                sb.append("  <url>\n")
+                  .append("    <loc>").append(escapeXml(loc)).append("</loc>\n")
+                  .append("    <lastmod>").append(lastmod).append("</lastmod>\n")
+                  .append("    <changefreq>weekly</changefreq>\n")
+                  .append("    <priority>0.8</priority>\n")
+                  .append("  </url>\n");
+            }
+        } while (chunk.size() == SITEMAP_PAGE_SIZE);
 
         sb.append("</urlset>");
         return sb.toString();

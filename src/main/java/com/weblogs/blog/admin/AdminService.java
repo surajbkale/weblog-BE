@@ -1,9 +1,6 @@
 package com.weblogs.blog.admin;
 
-import com.weblogs.blog.admin.dto.AdminPostResponse;
-import com.weblogs.blog.admin.dto.AdminStatsResponse;
-import com.weblogs.blog.admin.dto.AdminUserResponse;
-import com.weblogs.blog.admin.dto.RoleChangeRequest;
+import com.weblogs.blog.admin.dto.*;
 import com.weblogs.blog.cache.CacheService;
 import com.weblogs.blog.comment.CommentRepository;
 import com.weblogs.blog.common.PaginatedResponse;
@@ -24,6 +21,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.UUID;
 
 /**
@@ -37,6 +36,8 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class AdminService {
+
+    private static final Duration STATS_WINDOW = Duration.ofDays(7);
 
     private final UserRepository    userRepository;
     private final PostRepository    postRepository;
@@ -92,6 +93,36 @@ public class AdminService {
         return AdminUserResponse.from(saved);
     }
 
+    /**
+     * Suspends or reinstates a user account.
+     *
+     * <p>Setting {@code active = false} marks the account as suspended.
+     * The user's existing JWTs will be rejected by {@code JwtAuthFilter}
+     * on the next request (the {@code active} claim is baked into the JWT).
+     * Self-suspension is prevented so an admin cannot lock themselves out.
+     *
+     * @param targetUserId ID of the user to modify
+     * @param request      contains the desired {@code active} flag
+     * @param currentUser  the authenticated admin performing the action
+     */
+    @PreAuthorize("hasRole('ADMIN')")
+    @Transactional
+    public AdminUserResponse setUserActive(UUID targetUserId,
+                                           UserStatusRequest request,
+                                           User currentUser) {
+        if (currentUser.getId().equals(targetUserId) && !request.active()) {
+            throw new ForbiddenException("Admins cannot suspend their own account");
+        }
+
+        User target = userRepository.findById(targetUserId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+
+        target.setActive(request.active());
+        User saved = userRepository.save(target);
+        log.info("Admin {} set active={} for user {}", currentUser.getId(), request.active(), targetUserId);
+        return AdminUserResponse.from(saved);
+    }
+
     // ── Posts ─────────────────────────────────────────────────────────────────
 
     /**
@@ -137,6 +168,36 @@ public class AdminService {
     }
 
     /**
+     * Restores a soft-deleted post (sets {@code deleted = false}).
+     * The post is returned to DRAFT status and becomes visible again to its author.
+     * To make it public, it must be explicitly re-published.
+     *
+     * @param postId the soft-deleted post to restore
+     */
+    @PreAuthorize("hasRole('ADMIN')")
+    @Transactional
+    public AdminPostResponse restorePost(UUID postId) {
+        // Use findById (not the public helper) so we can find deleted posts too
+        Post post = postRepository.findById(postId)
+                .orElseThrow(() -> new NotFoundException("Post not found"));
+
+        if (!post.isDeleted()) {
+            throw new ForbiddenException("Post is not deleted and does not need to be restored");
+        }
+
+        post.setDeleted(false);
+        post.setStatus(PostStatus.DRAFT);   // put back as draft, not directly published
+        postRepository.save(post);
+
+        cacheService.evictAllPostListCaches();
+
+        log.info("Admin restored soft-deleted post id={}", postId);
+        long likeCount    = postRepository.countLikesByPostId(postId);
+        long commentCount = postRepository.countCommentsByPostId(postId);
+        return AdminPostResponse.from(post, likeCount, commentCount);
+    }
+
+    /**
      * Toggles the {@code featured} flag on a post.
      *
      * <p>Setting {@code featured = true} makes the post appear in
@@ -167,23 +228,35 @@ public class AdminService {
 
     /**
      * Aggregates platform-wide counts for the admin dashboard.
-     * Each count is a simple indexed {@code COUNT(*)} — no caching needed.
+     * Includes all-time totals and a rolling 7-day window for growth monitoring.
      */
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional(readOnly = true)
     public AdminStatsResponse getStats() {
+        Instant since7d = Instant.now().minus(STATS_WINDOW);
+
         long totalUsers     = userRepository.count();
-        long totalPosts     = postRepository.count();      // all rows, including soft-deleted
+        long totalPosts     = postRepository.count();
         long totalPublished = postRepository.countByStatusAndDeletedFalse(PostStatus.PUBLISHED);
         long totalComments  = commentRepository.countByDeletedFalse();
         long totalLikes     = likeRepository.count();
+        long totalViews     = postRepository.sumAllViewCounts();
+
+        long newUsers7d    = userRepository.countByCreatedAtAfter(since7d);
+        long newPosts7d    = postRepository.countByCreatedAtAfterAndDeletedFalse(since7d);
+        long newComments7d = commentRepository.countByCreatedAtAfterAndDeletedFalse(since7d);
 
         return new AdminStatsResponse(
                 totalUsers,
                 totalPosts,
                 totalPublished,
                 totalComments,
-                totalLikes
+                totalLikes,
+                totalViews,
+                newUsers7d,
+                newPosts7d,
+                newComments7d,
+                Instant.now()
         );
     }
 }

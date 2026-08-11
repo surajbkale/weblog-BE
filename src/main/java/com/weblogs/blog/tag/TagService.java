@@ -2,14 +2,17 @@ package com.weblogs.blog.tag;
 
 import com.weblogs.blog.cache.CacheService;
 import com.weblogs.blog.config.AppProperties;
+import com.weblogs.blog.exception.NotFoundException;
 import com.weblogs.blog.tag.dto.TagResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Service layer for tags.
@@ -48,5 +51,21 @@ public class TagService {
     /** Evicts the tag cache — call this whenever tags are created or deleted. */
     public void evictTagCache() {
         cacheService.evict(CacheService.TAGS_ALL);
+    }
+
+    /**
+     * Permanently deletes a tag by ID. Restricted to ADMIN role.
+     * Posts that reference this tag will have it removed automatically
+     * via the JOIN TABLE FK on delete cascade.
+     * The tag cache is evicted so the next list request reflects the change.
+     */
+    @PreAuthorize("hasRole('ADMIN')")
+    @Transactional
+    public void delete(UUID id) {
+        if (!tagRepository.existsById(id)) {
+            throw new NotFoundException("Tag not found");
+        }
+        tagRepository.deleteById(id);
+        evictTagCache();
     }
 }

@@ -1,9 +1,6 @@
 package com.weblogs.blog.admin;
 
-import com.weblogs.blog.admin.dto.AdminPostResponse;
-import com.weblogs.blog.admin.dto.AdminStatsResponse;
-import com.weblogs.blog.admin.dto.AdminUserResponse;
-import com.weblogs.blog.admin.dto.RoleChangeRequest;
+import com.weblogs.blog.admin.dto.*;
 import com.weblogs.blog.common.ApiResponse;
 import com.weblogs.blog.common.PaginatedResponse;
 import com.weblogs.blog.post.PostStatus;
@@ -67,6 +64,23 @@ public class AdminController {
                 adminService.changeRole(id, request, currentUser)));
     }
 
+    /**
+     * PATCH /api/v1/admin/users/{id}/status
+     *
+     * <p>Suspends ({@code active=false}) or reinstates ({@code active=true}) a user account.
+     * Suspended users receive 401 on all subsequent authenticated requests.
+     * Admins cannot suspend themselves.
+     */
+    @PatchMapping("/users/{id}/status")
+    public ResponseEntity<ApiResponse<AdminUserResponse>> setUserStatus(
+            @PathVariable UUID id,
+            @Valid @RequestBody UserStatusRequest request,
+            @AuthenticationPrincipal User currentUser) {
+
+        return ResponseEntity.ok(ApiResponse.ok(
+                adminService.setUserActive(id, request, currentUser)));
+    }
+
     // ── Posts ─────────────────────────────────────────────────────────────────
 
     /**
@@ -98,6 +112,17 @@ public class AdminController {
     }
 
     /**
+     * PATCH /api/v1/admin/posts/{id}/restore
+     *
+     * <p>Restores a soft-deleted post, returning it to DRAFT status.
+     * The author must explicitly re-publish it to make it public.
+     */
+    @PatchMapping("/posts/{id}/restore")
+    public ResponseEntity<ApiResponse<AdminPostResponse>> restorePost(@PathVariable UUID id) {
+        return ResponseEntity.ok(ApiResponse.ok(adminService.restorePost(id)));
+    }
+
+    /**
      * PATCH /api/v1/admin/posts/{id}/featured?featured=true|false
      *
      * <p>Adds or removes a post from the admin-curated featured list.
@@ -117,7 +142,8 @@ public class AdminController {
      * GET /api/v1/admin/stats
      *
      * <p>Returns aggregated platform statistics:
-     * total users, posts (all statuses), published posts, comments, and likes.
+     * all-time totals (users, posts, published posts, comments, likes, views)
+     * plus a 7-day rolling window for growth monitoring.
      */
     @GetMapping("/stats")
     public ResponseEntity<ApiResponse<AdminStatsResponse>> getStats() {

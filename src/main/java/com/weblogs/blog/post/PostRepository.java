@@ -52,7 +52,10 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
                 CASE WHEN :sort = 'mostLiked' THEN
                     (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id)
                 END DESC NULLS LAST,
-                CASE WHEN :sort != 'mostLiked' OR :sort IS NULL THEN
+                CASE WHEN :sort = 'relevance' AND :q IS NOT NULL THEN
+                    ts_rank(p.search_vector, plainto_tsquery('english', :q))
+                END DESC NULLS LAST,
+                CASE WHEN :sort NOT IN ('mostLiked', 'relevance') OR :sort IS NULL THEN
                     p.published_at
                 END DESC NULLS LAST
             """,
@@ -163,5 +166,11 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
             ORDER BY p.publishedAt DESC
             """)
     List<Post> findLatestPublished(Pageable pageable);
-}
 
+    /** Count non-deleted posts created after the given instant — used for time-series stats. */
+    long countByCreatedAtAfterAndDeletedFalse(Instant since);
+
+    /** Sum of all view_count values across all published non-deleted posts. */
+    @Query("SELECT COALESCE(SUM(p.viewCount), 0) FROM Post p WHERE p.deleted = false")
+    long sumAllViewCounts();
+}

@@ -46,6 +46,13 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
         try {
             Claims claims = jwtService.validateAndExtractClaims(token);
+
+            // Reject suspended accounts immediately — no DB hit needed (claim is in JWT)
+            if (!jwtService.extractActive(claims)) {
+                writeUnauthorized(response, "Your account has been suspended. Please contact support.");
+                return;
+            }
+
             UUID userId  = jwtService.extractUserId(claims);
             String email = jwtService.extractEmail(claims);
             String role  = jwtService.extractRole(claims);
@@ -56,6 +63,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     .email(email)
                     .role(Role.valueOf(role))
                     .emailVerified(true)
+                    .active(true)
                     .build();
 
             var auth = new UsernamePasswordAuthenticationToken(

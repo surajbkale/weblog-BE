@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.UUID;
 
 public interface CommentRepository extends JpaRepository<Comment, UUID> {
@@ -22,6 +23,17 @@ public interface CommentRepository extends JpaRepository<Comment, UUID> {
             """)
     Page<Comment> findByPostId(@Param("postId") UUID postId, Pageable pageable);
 
+    /** Direct replies to a specific parent comment — ordered oldest first. */
+    @Query("""
+            SELECT c FROM Comment c
+            WHERE c.parentId = :parentId
+            ORDER BY c.createdAt ASC
+            """)
+    Page<Comment> findByParentId(@Param("parentId") UUID parentId, Pageable pageable);
+
     /** Total non-deleted comment count — used by the admin stats endpoint. */
     long countByDeletedFalse();
+
+    /** Count non-deleted comments created after the given instant — used for time-series stats. */
+    long countByCreatedAtAfterAndDeletedFalse(Instant since);
 }

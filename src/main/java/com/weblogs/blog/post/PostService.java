@@ -223,7 +223,8 @@ public class PostService {
                 return new PostResponse(hit.id(), hit.title(), hit.slug(), hit.content(),
                         hit.excerpt(), hit.coverImageUrl(), hit.status(), hit.author(),
                         hit.categories(), hit.tags(), hit.likeCount(), hit.commentCount(),
-                        hit.viewCount(), liked, hit.publishedAt(), hit.createdAt());
+                        hit.viewCount(), liked, hit.readingTimeMinutes(),
+                        hit.publishedAt(), hit.createdAt());
             }
             return hit;
         }
@@ -256,7 +257,8 @@ public class PostService {
                 return new PostResponse(base.id(), base.title(), base.slug(), base.content(),
                         base.excerpt(), base.coverImageUrl(), base.status(), base.author(),
                         base.categories(), base.tags(), base.likeCount(), base.commentCount(),
-                        base.viewCount(), true, base.publishedAt(), base.createdAt());
+                        base.viewCount(), true, base.readingTimeMinutes(),
+                        base.publishedAt(), base.createdAt());
             }
         }
         return base;

@@ -17,6 +17,7 @@ public record AdminUserResponse(
         String  role,
         String  authProvider,
         boolean emailVerified,
+        boolean active,
         Instant createdAt
 ) {
     public static AdminUserResponse from(User user) {
@@ -28,6 +29,7 @@ public record AdminUserResponse(
                 user.getRole().name(),
                 user.getAuthProvider().name(),
                 user.isEmailVerified(),
+                user.isActive(),
                 user.getCreatedAt()
         );
     }

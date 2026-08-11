@@ -52,6 +52,11 @@ public class SecurityConfig {
                     "/oauth2/**",
                     "/login/oauth2/**"
                 ).permitAll()
+                // /me requires authentication — must come BEFORE the broad GET rule below
+                // so Spring Security matches it first (rules are evaluated top-to-bottom).
+                .requestMatchers(org.springframework.http.HttpMethod.GET,
+                    "/api/v1/posts/me"
+                ).authenticated()
                 // Public read-only content endpoints (JWT optional — filter passes through)
                 .requestMatchers(org.springframework.http.HttpMethod.GET,
                     "/api/v1/posts",
@@ -59,8 +64,10 @@ public class SecurityConfig {
                     "/api/v1/posts/trending",
                     "/api/v1/posts/featured",
                     "/api/v1/posts/*/comments",
+                    "/api/v1/comments/*/replies",    // lazy-loaded thread replies
                     "/api/v1/categories",
-                    "/api/v1/tags"
+                    "/api/v1/tags",
+                    "/api/v1/users/{id}"      // public author profiles
                 ).permitAll()
                 // Feed + sitemap — always public, no auth needed
                 .requestMatchers("/feed.xml", "/sitemap.xml").permitAll()

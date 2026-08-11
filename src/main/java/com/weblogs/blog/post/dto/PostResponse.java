@@ -23,10 +23,11 @@ public record PostResponse(
         AuthorSummary author,
         List<CategoryResponse> categories,
         List<TagResponse>      tags,
-        long   likeCount,
-        long   commentCount,
-        long   viewCount,
+        long    likeCount,
+        long    commentCount,
+        long    viewCount,
         boolean likedByCurrentUser,
+        int     readingTimeMinutes,     // ceil(word_count / 200)
         Instant publishedAt,
         Instant createdAt
 ) {
@@ -49,8 +50,16 @@ public record PostResponse(
                 commentCount,
                 post.getViewCount(),
                 likedByCurrentUser,
+                computeReadingTime(post.getContent()),
                 post.getPublishedAt(),
                 post.getCreatedAt()
         );
+    }
+
+    /** Estimates reading time at 200 words per minute (average adult reading speed). */
+    private static int computeReadingTime(String content) {
+        if (content == null || content.isBlank()) return 0;
+        int wordCount = content.trim().split("\\s+").length;
+        return (int) Math.max(1, Math.ceil(wordCount / 200.0));
     }
 }

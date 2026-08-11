@@ -99,6 +99,22 @@ public class CommentService {
         return PaginatedResponse.from(page.map(CommentResponse::from));
     }
 
+    // ── List replies to a comment ─────────────────────────────────────────────
+
+    /**
+     * Returns a paginated list of direct replies to the given parent comment.
+     * Soft-deleted replies are included so thread integrity is preserved on the frontend.
+     * This is the companion to {@link #listByPost} for clients that want lazy-loaded threads.
+     */
+    @Transactional(readOnly = true)
+    public PaginatedResponse<CommentResponse> listReplies(UUID parentId, Pageable pageable) {
+        commentRepository.findById(parentId)
+                .orElseThrow(() -> new EntityNotFoundException("Comment not found"));
+
+        Page<Comment> page = commentRepository.findByParentId(parentId, pageable);
+        return PaginatedResponse.from(page.map(CommentResponse::from));
+    }
+
     // ── Helper ────────────────────────────────────────────────────────────────
 
     private Comment requireComment(UUID commentId) {

@@ -10,6 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/categories")
@@ -30,5 +31,20 @@ public class CategoryController {
             @Valid @RequestBody CategoryRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.ok(categoryService.create(request)));
+    }
+
+    /** ADMIN only — renames an existing category. Slug is re-derived automatically. */
+    @PutMapping("/{id}")
+    public ResponseEntity<ApiResponse<CategoryResponse>> update(
+            @PathVariable UUID id,
+            @Valid @RequestBody CategoryRequest request) {
+        return ResponseEntity.ok(ApiResponse.ok(categoryService.update(id, request)));
+    }
+
+    /** ADMIN only — permanently deletes a category (not reversible). */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<ApiResponse<Void>> delete(@PathVariable UUID id) {
+        categoryService.delete(id);
+        return ResponseEntity.ok(ApiResponse.ok(null));
     }
 }
