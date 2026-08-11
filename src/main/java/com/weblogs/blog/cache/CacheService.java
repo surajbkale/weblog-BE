@@ -38,6 +38,8 @@ public class CacheService {
     public static final String POST_LIST_KEYS_TRACKER = "post:list:keys";
     public static final String TAGS_ALL               = "tags:all";
     public static final String CATEGORIES_ALL         = "categories:all";
+    public static final String TRENDING_POSTS         = "post:trending";
+    public static final String FEATURED_POSTS         = "post:featured";
 
     // ── Generic get/put/evict ─────────────────────────────────────────────────
 

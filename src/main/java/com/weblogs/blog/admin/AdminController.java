@@ -97,6 +97,20 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.ok(null));
     }
 
+    /**
+     * PATCH /api/v1/admin/posts/{id}/featured?featured=true|false
+     *
+     * <p>Adds or removes a post from the admin-curated featured list.
+     * Setting {@code featured=true} makes the post appear in
+     * {@code GET /api/v1/posts/featured}. The featured cache is evicted immediately.
+     */
+    @PatchMapping("/posts/{id}/featured")
+    public ResponseEntity<ApiResponse<AdminPostResponse>> setFeatured(
+            @PathVariable UUID id,
+            @RequestParam boolean featured) {
+        return ResponseEntity.ok(ApiResponse.ok(adminService.setFeatured(id, featured)));
+    }
+
     // ── Stats ─────────────────────────────────────────────────────────────────
 
     /**

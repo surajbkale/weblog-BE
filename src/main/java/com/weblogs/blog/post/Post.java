@@ -79,6 +79,10 @@ public class Post {
 
     @Column(nullable = false)
     @Builder.Default
+    private boolean featured = false;
+
+    @Column(nullable = false)
+    @Builder.Default
     private boolean deleted = false;
 
     /**

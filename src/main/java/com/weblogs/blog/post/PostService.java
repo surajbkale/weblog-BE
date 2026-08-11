@@ -16,6 +16,7 @@ import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -269,6 +270,67 @@ public class PostService {
         return PaginatedResponse.from(page.map(post -> toListItemResponse(post, currentUser)));
     }
 
+    // ── Trending ─────────────────────────────────────────────────────
+
+    /**
+     * Returns the top-N posts by view count published within the configured lookback window.
+     *
+     * <p>Result is cached in Redis for {@code app.cache.trending-ttl-seconds}.
+     * The cache is evicted automatically on any post mutation (publish, delete, feature).
+     */
+    @Transactional(readOnly = true)
+    public List<PostListItemResponse> getTrending() {
+        Optional<List<PostListItemResponse>> cached = cacheService.get(CacheService.TRENDING_POSTS);
+        if (cached.isPresent()) {
+            log.debug("Cache HIT: {}", CacheService.TRENDING_POSTS);
+            return cached.get();
+        }
+        log.debug("Cache MISS: {}", CacheService.TRENDING_POSTS);
+
+        int windowDays = appProperties.getCache().getTrendingWindowDays();
+        int limit      = appProperties.getCache().getTrendingLimit();
+        Instant since  = Instant.now().minus(Duration.ofDays(windowDays));
+
+        List<PostListItemResponse> result = postRepository
+                .findTrending(since, PageRequest.of(0, limit))
+                .stream()
+                .map(post -> toListItemResponse(post, null))
+                .toList();
+
+        cacheService.put(CacheService.TRENDING_POSTS, result,
+                Duration.ofSeconds(appProperties.getCache().getTrendingTtlSeconds()));
+        return result;
+    }
+
+    // ── Featured ────────────────────────────────────────────────────
+
+    /**
+     * Returns the admin-curated featured post list.
+     *
+     * <p>Result is cached in Redis for {@code app.cache.featured-ttl-seconds}.
+     * The cache is evicted when a post is featured/unfeatured, published, or deleted.
+     */
+    @Transactional(readOnly = true)
+    public List<PostListItemResponse> getFeatured() {
+        Optional<List<PostListItemResponse>> cached = cacheService.get(CacheService.FEATURED_POSTS);
+        if (cached.isPresent()) {
+            log.debug("Cache HIT: {}", CacheService.FEATURED_POSTS);
+            return cached.get();
+        }
+        log.debug("Cache MISS: {}", CacheService.FEATURED_POSTS);
+
+        int limit = appProperties.getCache().getFeaturedLimit();
+        List<PostListItemResponse> result = postRepository
+                .findFeatured(PageRequest.of(0, limit))
+                .stream()
+                .map(post -> toListItemResponse(post, null))
+                .toList();
+
+        cacheService.put(CacheService.FEATURED_POSTS, result,
+                Duration.ofSeconds(appProperties.getCache().getFeaturedTtlSeconds()));
+        return result;
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private Post requirePost(UUID postId) {
@@ -277,10 +339,12 @@ public class PostService {
                 .orElseThrow(() -> new EntityNotFoundException("Post not found"));
     }
 
-    /** Evicts slug cache + entire list cache. Called on every post mutation. */
+    /** Evicts slug cache + entire list cache + trending + featured. Called on every post mutation. */
     private void evictPostCaches(String slug) {
         cacheService.evict(CacheService.POST_SLUG_PREFIX + slug);
         cacheService.evictAllPostListCaches();
+        cacheService.evict(CacheService.TRENDING_POSTS);
+        cacheService.evict(CacheService.FEATURED_POSTS);
     }
 
     /**

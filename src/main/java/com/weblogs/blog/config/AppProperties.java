@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 public class AppProperties {
 
     private String frontendUrl = "http://localhost:3000";
+    private String siteUrl     = "http://localhost:8080";
 
     private Mail mail = new Mail();
     private RateLimit rateLimit = new RateLimit();
@@ -53,6 +54,12 @@ public class AppProperties {
         private long tagsTtlSeconds         = 3600;
         private long categoriesTtlSeconds   = 3600;
         private long viewFlushIntervalMs    = 300_000;
+        private long trendingTtlSeconds     = 300;    // 5 min
+        private long featuredTtlSeconds     = 600;    // 10 min
+        private int  trendingWindowDays     = 7;      // lookback window for trending
+        private int  trendingLimit          = 10;     // max posts in trending list
+        private int  featuredLimit          = 10;     // max posts in featured list
+        private int  feedLimit              = 20;     // posts included in RSS feed
     }
 }
 

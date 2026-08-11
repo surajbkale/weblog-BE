@@ -56,10 +56,14 @@ public class SecurityConfig {
                 .requestMatchers(org.springframework.http.HttpMethod.GET,
                     "/api/v1/posts",
                     "/api/v1/posts/{slug}",
+                    "/api/v1/posts/trending",
+                    "/api/v1/posts/featured",
                     "/api/v1/posts/*/comments",
                     "/api/v1/categories",
                     "/api/v1/tags"
                 ).permitAll()
+                // Feed + sitemap — always public, no auth needed
+                .requestMatchers("/feed.xml", "/sitemap.xml").permitAll()
                 // Admin-only endpoints — ROLE_ADMIN required at URL level
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated()

@@ -91,6 +91,7 @@ jwt:
 # ── App Custom Properties ────────────────────────────────────────────────────
 app:
   frontend-url: ${FRONTEND_URL:http://localhost:3000}
+  site-url: ${SITE_URL:http://localhost:8080}
   mail:
     from: ${MAIL_FROM:noreply@weblogs.com}
   rate-limit:
@@ -107,6 +108,12 @@ app:
     tags-ttl-seconds: 3600            # 1 hr — tag list (rarely changes)
     categories-ttl-seconds: 3600      # 1 hr — category list
     view-flush-interval-ms: 300000    # 5 min — how often view counts flush to DB
+    trending-ttl-seconds: 300         # 5 min — trending post list
+    featured-ttl-seconds: 600         # 10 min — featured post list
+    trending-window-days: 7           # posts published within N days are eligible
+    trending-limit: 10                # max posts in trending response
+    featured-limit: 10                # max posts in featured response
+    feed-limit: 20                    # posts included in RSS feed
 
 
 # ── Logging ─────────────────────────────────────────────────────────────────

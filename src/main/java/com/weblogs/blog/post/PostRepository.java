@@ -7,6 +7,8 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -121,5 +123,45 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
     @Modifying
     @Query("DELETE FROM Post p WHERE p.id = :id")
     void hardDeleteById(@Param("id") UUID id);
+
+    // ── SEO / Discovery queries ───────────────────────────────────────────────
+
+    /**
+     * Trending: published posts within the lookback window, ordered by view count.
+     * The {@code publishedAt >= since} filter limits to recently published content;
+     * {@code viewCount DESC} ranking favours currently hot posts.
+     */
+    @Query("""
+            SELECT p FROM Post p
+            WHERE p.status     = com.weblogs.blog.post.PostStatus.PUBLISHED
+              AND p.deleted    = false
+              AND p.publishedAt >= :since
+            ORDER BY p.viewCount DESC
+            """)
+    List<Post> findTrending(@Param("since") Instant since, Pageable pageable);
+
+    /**
+     * Featured: admin-curated published posts, newest first.
+     */
+    @Query("""
+            SELECT p FROM Post p
+            WHERE p.status   = com.weblogs.blog.post.PostStatus.PUBLISHED
+              AND p.deleted  = false
+              AND p.featured = true
+            ORDER BY p.publishedAt DESC
+            """)
+    List<Post> findFeatured(Pageable pageable);
+
+    /**
+     * Latest published posts — used by the RSS feed and sitemap.
+     * Returns all published posts (no filter beyond status) ordered by publication date.
+     */
+    @Query("""
+            SELECT p FROM Post p
+            WHERE p.status  = com.weblogs.blog.post.PostStatus.PUBLISHED
+              AND p.deleted = false
+            ORDER BY p.publishedAt DESC
+            """)
+    List<Post> findLatestPublished(Pageable pageable);
 }
 

@@ -127,11 +127,40 @@ public class AdminService {
         String slug = post.getSlug();
         postRepository.hardDeleteById(postId);
 
-        // Evict Redis caches so stale data is not served after deletion
+        // Evict all Redis caches so stale data is not served after deletion
         cacheService.evict(CacheService.POST_SLUG_PREFIX + slug);
         cacheService.evictAllPostListCaches();
+        cacheService.evict(CacheService.TRENDING_POSTS);
+        cacheService.evict(CacheService.FEATURED_POSTS);
 
         log.info("Admin hard-deleted post id={} slug={}", postId, slug);
+    }
+
+    /**
+     * Toggles the {@code featured} flag on a post.
+     *
+     * <p>Setting {@code featured = true} makes the post appear in
+     * {@code GET /api/v1/posts/featured}. The Redis featured-list cache is
+     * evicted immediately so the next request reflects the change.
+     *
+     * @param postId   the post to feature or unfeature
+     * @param featured {@code true} to feature, {@code false} to unfeature
+     */
+    @PreAuthorize("hasRole('ADMIN')")
+    @Transactional
+    public AdminPostResponse setFeatured(UUID postId, boolean featured) {
+        Post post = postRepository.findById(postId)
+                .orElseThrow(() -> new NotFoundException("Post not found"));
+
+        post.setFeatured(featured);
+        postRepository.save(post);
+        cacheService.evict(CacheService.FEATURED_POSTS);
+
+        long likeCount    = postRepository.countLikesByPostId(postId);
+        long commentCount = postRepository.countCommentsByPostId(postId);
+
+        log.info("Admin set featured={} for post id={}", featured, postId);
+        return AdminPostResponse.from(post, likeCount, commentCount);
     }
 
     // ── Stats ─────────────────────────────────────────────────────────────────
