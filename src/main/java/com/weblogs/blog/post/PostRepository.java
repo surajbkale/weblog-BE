@@ -3,9 +3,12 @@ package com.weblogs.blog.post;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -85,4 +88,80 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
 
     @Query("SELECT COUNT(c) FROM Comment c WHERE c.post.id = :postId AND c.deleted = false")
     long countCommentsByPostId(@Param("postId") UUID postId);
+
+    /** Counts posts matching the given status that are not soft-deleted. Used by admin stats. */
+    long countByStatusAndDeletedFalse(PostStatus status);
+
+    // ── View count flush (called by ViewCountService scheduler) ──────────────
+
+    /**
+     * Additively increments {@code view_count} for a single post.
+     * Using {@code view_count + :delta} (not SET to an absolute value) means
+     * concurrent flushes never overwrite each other.
+     */
+    @Modifying
+    @Query("UPDATE Post p SET p.viewCount = p.viewCount + :delta WHERE p.id = :id")
+    void incrementViewCount(@Param("id") UUID id, @Param("delta") long delta);
+
+    // ── Admin queries ─────────────────────────────────────────────────────────
+
+    /**
+     * Returns all posts for the admin panel — all statuses, including soft-deleted.
+     * Optionally filtered by {@code status} (pass {@code null} to return everything).
+     */
+    @Query("""
+            SELECT p FROM Post p
+            WHERE (:status IS NULL OR p.status = :status)
+            ORDER BY p.createdAt DESC
+            """)
+    Page<Post> findAllForAdmin(@Param("status") PostStatus status, Pageable pageable);
+
+    /**
+     * Permanently removes a post row.
+     * Associated likes and comments are cleaned up via ON DELETE CASCADE.
+     */
+    @Modifying
+    @Query("DELETE FROM Post p WHERE p.id = :id")
+    void hardDeleteById(@Param("id") UUID id);
+
+    // ── SEO / Discovery queries ───────────────────────────────────────────────
+
+    /**
+     * Trending: published posts within the lookback window, ordered by view count.
+     * The {@code publishedAt >= since} filter limits to recently published content;
+     * {@code viewCount DESC} ranking favours currently hot posts.
+     */
+    @Query("""
+            SELECT p FROM Post p
+            WHERE p.status     = com.weblogs.blog.post.PostStatus.PUBLISHED
+              AND p.deleted    = false
+              AND p.publishedAt >= :since
+            ORDER BY p.viewCount DESC
+            """)
+    List<Post> findTrending(@Param("since") Instant since, Pageable pageable);
+
+    /**
+     * Featured: admin-curated published posts, newest first.
+     */
+    @Query("""
+            SELECT p FROM Post p
+            WHERE p.status   = com.weblogs.blog.post.PostStatus.PUBLISHED
+              AND p.deleted  = false
+              AND p.featured = true
+            ORDER BY p.publishedAt DESC
+            """)
+    List<Post> findFeatured(Pageable pageable);
+
+    /**
+     * Latest published posts — used by the RSS feed and sitemap.
+     * Returns all published posts (no filter beyond status) ordered by publication date.
+     */
+    @Query("""
+            SELECT p FROM Post p
+            WHERE p.status  = com.weblogs.blog.post.PostStatus.PUBLISHED
+              AND p.deleted = false
+            ORDER BY p.publishedAt DESC
+            """)
+    List<Post> findLatestPublished(Pageable pageable);
 }
+

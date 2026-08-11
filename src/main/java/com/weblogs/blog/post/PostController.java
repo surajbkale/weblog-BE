@@ -16,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -74,6 +75,31 @@ public class PostController {
 
         postService.deletePost(id, currentUser);
         return ResponseEntity.ok(ApiResponse.ok("Post deleted"));
+    }
+
+    // ── Discovery: Trending + Featured ───────────────────────────────────────
+
+    /**
+     * GET /api/v1/posts/trending
+     *
+     * <p>Public endpoint. Returns the top posts by view count published in the
+     * last N days (configured via {@code app.cache.trending-window-days}).
+     * Result is cached in Redis.
+     */
+    @GetMapping("/trending")
+    public ResponseEntity<ApiResponse<List<PostListItemResponse>>> getTrending() {
+        return ResponseEntity.ok(ApiResponse.ok(postService.getTrending()));
+    }
+
+    /**
+     * GET /api/v1/posts/featured
+     *
+     * <p>Public endpoint. Returns the admin-curated featured post list.
+     * Result is cached in Redis.
+     */
+    @GetMapping("/featured")
+    public ResponseEntity<ApiResponse<List<PostListItemResponse>>> getFeatured() {
+        return ResponseEntity.ok(ApiResponse.ok(postService.getFeatured()));
     }
 
     // ── Public list ───────────────────────────────────────────────────────────
