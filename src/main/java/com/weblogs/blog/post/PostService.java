@@ -1,9 +1,11 @@
 package com.weblogs.blog.post;
 
+import com.weblogs.blog.cache.CacheService;
 import com.weblogs.blog.category.Category;
 import com.weblogs.blog.category.CategoryRepository;
 import com.weblogs.blog.common.AuthorizationHelper;
 import com.weblogs.blog.common.PaginatedResponse;
+import com.weblogs.blog.config.AppProperties;
 import com.weblogs.blog.like.LikeRepository;
 import com.weblogs.blog.post.dto.*;
 import com.weblogs.blog.tag.Tag;
@@ -11,15 +13,18 @@ import com.weblogs.blog.tag.TagRepository;
 import com.weblogs.blog.user.User;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.regex.Pattern;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class PostService {
@@ -29,6 +34,9 @@ public class PostService {
     private final TagRepository        tagRepository;
     private final LikeRepository       likeRepository;
     private final AuthorizationHelper  authorizationHelper;
+    private final CacheService         cacheService;
+    private final ViewCountService     viewCountService;
+    private final AppProperties        appProperties;
 
     // ── Create ────────────────────────────────────────────────────────────────
 
@@ -52,6 +60,11 @@ public class PostService {
                 .build();
 
         post = postRepository.save(post);
+
+        // A new draft doesn't appear in the public list, but evict anyway so
+        // subsequent publishes get a clean slate.
+        cacheService.evictAllPostListCaches();
+
         return toFullResponse(post, author);
     }
 
@@ -76,6 +89,8 @@ public class PostService {
         if (request.tagNames()      != null) post.setTags(resolveOrCreateTags(request.tagNames()));
 
         post = postRepository.save(post);
+        evictPostCaches(post.getSlug());
+
         return toFullResponse(post, currentUser);
     }
 
@@ -91,6 +106,8 @@ public class PostService {
             post.setPublishedAt(Instant.now());
         }
         post = postRepository.save(post);
+        evictPostCaches(post.getSlug());
+
         return toFullResponse(post, currentUser);
     }
 
@@ -101,6 +118,8 @@ public class PostService {
 
         post.setStatus(PostStatus.DRAFT);
         post = postRepository.save(post);
+        evictPostCaches(post.getSlug());
+
         return toFullResponse(post, currentUser);
     }
 
@@ -113,6 +132,7 @@ public class PostService {
 
         post.setDeleted(true);
         postRepository.save(post);
+        evictPostCaches(post.getSlug());
     }
 
     // ── Public list ───────────────────────────────────────────────────────────
@@ -122,8 +142,9 @@ public class PostService {
      * Supports filtering by category slug, tag slug, authorId, and full-text query.
      * Sort: {@code mostLiked} → like count DESC, default → publishedAt DESC.
      *
-     * <p>likeCount and commentCount are computed via count queries (not denormalized counters)
-     * for simplicity and correctness at typical blog scale.
+     * <p>Caching: anonymous requests are served from Redis (TTL 5 min).
+     * Authenticated requests bypass the cache so {@code likedByCurrentUser}
+     * is always accurate.
      */
     @Transactional(readOnly = true)
     public PaginatedResponse<PostListItemResponse> getPublicList(
@@ -135,6 +156,21 @@ public class PostService {
             Pageable pageable,
             User   currentUser   // nullable — null when unauthenticated
     ) {
+        // Only cache for anonymous callers — auth users need accurate liked state
+        boolean canUseCache = (currentUser == null);
+        String cacheKey = null;
+
+        if (canUseCache) {
+            cacheKey = buildListCacheKey(categorySlug, tagSlug, authorId, q, sort, pageable);
+            Optional<PaginatedResponse<PostListItemResponse>> cached =
+                    cacheService.get(cacheKey);
+            if (cached.isPresent()) {
+                log.debug("Cache HIT: {}", cacheKey);
+                return cached.get();
+            }
+            log.debug("Cache MISS: {}", cacheKey);
+        }
+
         Page<Post> page = postRepository.findPublished(
                 categorySlug,
                 tagSlug,
@@ -144,7 +180,15 @@ public class PostService {
                 pageable
         );
 
-        return PaginatedResponse.from(page.map(post -> toListItemResponse(post, currentUser)));
+        PaginatedResponse<PostListItemResponse> result =
+                PaginatedResponse.from(page.map(post -> toListItemResponse(post, currentUser)));
+
+        if (canUseCache && cacheKey != null) {
+            cacheService.putListCache(cacheKey, result,
+                    Duration.ofSeconds(appProperties.getCache().getPostListTtlSeconds()));
+        }
+
+        return result;
     }
 
     // ── Single post by slug ───────────────────────────────────────────────────
@@ -152,9 +196,36 @@ public class PostService {
     /**
      * Returns the post if it is published. If it is a draft, only the author may view it;
      * anyone else gets a 404 (no 403 — don't leak draft existence).
+     *
+     * <p>Caching: published posts are cached by slug (TTL 10 min) with
+     * {@code likedByCurrentUser = false}. On cache hit, the liked flag is patched via
+     * a single DB lookup if the caller is authenticated.
      */
     @Transactional(readOnly = true)
     public PostResponse getBySlug(String slug, User currentUser) {
+        // Try cache first — only for published posts (drafts are never cached)
+        String cacheKey = CacheService.POST_SLUG_PREFIX + slug;
+        Optional<PostResponse> cached = cacheService.get(cacheKey);
+
+        if (cached.isPresent()) {
+            log.debug("Cache HIT: {}", cacheKey);
+            PostResponse hit = cached.get();
+            // Increment view regardless of cache status
+            viewCountService.increment(UUID.fromString(hit.id().toString()));
+            // Patch the user-specific liked flag
+            boolean liked = currentUser != null
+                    && likeRepository.existsByPostIdAndUserId(hit.id(), currentUser.getId());
+            if (liked != hit.likedByCurrentUser()) {
+                // Return a new record instance with corrected liked state
+                return new PostResponse(hit.id(), hit.title(), hit.slug(), hit.content(),
+                        hit.excerpt(), hit.coverImageUrl(), hit.status(), hit.author(),
+                        hit.categories(), hit.tags(), hit.likeCount(), hit.commentCount(),
+                        liked, hit.publishedAt(), hit.createdAt());
+            }
+            return hit;
+        }
+
+        log.debug("Cache MISS: {}", cacheKey);
         Post post = postRepository.findBySlugAndDeletedFalse(slug)
                 .orElseThrow(() -> new EntityNotFoundException("Post not found"));
 
@@ -165,9 +236,27 @@ public class PostService {
             if (!isAuthor) {
                 throw new EntityNotFoundException("Post not found");
             }
+            // Don't cache drafts
+            return toFullResponse(post, currentUser);
         }
 
-        return toFullResponse(post, currentUser);
+        // Published — increment view and cache with liked=false
+        viewCountService.increment(post.getId());
+        PostResponse base = toFullResponse(post, null); // liked=false for cache
+        cacheService.put(cacheKey, base,
+                Duration.ofSeconds(appProperties.getCache().getPostBySlugTtlSeconds()));
+
+        // Patch liked for the current caller if authenticated
+        if (currentUser != null) {
+            boolean liked = likeRepository.existsByPostIdAndUserId(post.getId(), currentUser.getId());
+            if (liked) {
+                return new PostResponse(base.id(), base.title(), base.slug(), base.content(),
+                        base.excerpt(), base.coverImageUrl(), base.status(), base.author(),
+                        base.categories(), base.tags(), base.likeCount(), base.commentCount(),
+                        true, base.publishedAt(), base.createdAt());
+            }
+        }
+        return base;
     }
 
     // ── My posts ──────────────────────────────────────────────────────────────
@@ -184,6 +273,32 @@ public class PostService {
         return postRepository.findById(postId)
                 .filter(p -> !p.isDeleted())
                 .orElseThrow(() -> new EntityNotFoundException("Post not found"));
+    }
+
+    /** Evicts slug cache + entire list cache. Called on every post mutation. */
+    private void evictPostCaches(String slug) {
+        cacheService.evict(CacheService.POST_SLUG_PREFIX + slug);
+        cacheService.evictAllPostListCaches();
+    }
+
+    /**
+     * Builds a deterministic Redis key for a post list query.
+     * Nulls are replaced with "_" so the key is always well-formed.
+     */
+    private String buildListCacheKey(String category, String tag, UUID authorId,
+                                     String q, String sort, Pageable pageable) {
+        return CacheService.POST_LIST_PREFIX
+                + nvl(category) + ":"
+                + nvl(tag) + ":"
+                + nvl(authorId) + ":"
+                + nvl(q) + ":"
+                + nvl(sort) + ":"
+                + pageable.getPageNumber() + ":"
+                + pageable.getPageSize();
+    }
+
+    private static String nvl(Object value) {
+        return value == null ? "_" : value.toString().replace(":", "-");
     }
 
     /**
@@ -259,3 +374,4 @@ public class PostService {
         return PostListItemResponse.from(post, likeCount, commentCount, liked);
     }
 }
+

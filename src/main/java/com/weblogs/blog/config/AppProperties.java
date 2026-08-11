@@ -16,6 +16,7 @@ public class AppProperties {
     private Mail mail = new Mail();
     private RateLimit rateLimit = new RateLimit();
     private Cloudinary cloudinary = new Cloudinary();
+    private Cache cache = new Cache();
 
     @Getter
     @Setter
@@ -43,4 +44,15 @@ public class AppProperties {
         private String apiKey;
         private String apiSecret;
     }
+
+    @Getter
+    @Setter
+    public static class Cache {
+        private long postListTtlSeconds     = 300;
+        private long postBySlugTtlSeconds   = 600;
+        private long tagsTtlSeconds         = 3600;
+        private long categoriesTtlSeconds   = 3600;
+        private long viewFlushIntervalMs    = 300_000;
+    }
 }
+

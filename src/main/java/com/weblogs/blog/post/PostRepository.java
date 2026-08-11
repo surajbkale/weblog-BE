@@ -3,6 +3,7 @@ package com.weblogs.blog.post;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -85,4 +86,16 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
 
     @Query("SELECT COUNT(c) FROM Comment c WHERE c.post.id = :postId AND c.deleted = false")
     long countCommentsByPostId(@Param("postId") UUID postId);
+
+    // ── View count flush (called by ViewCountService scheduler) ──────────────
+
+    /**
+     * Additively increments {@code view_count} for a single post.
+     * Using {@code view_count + :delta} (not SET to an absolute value) means
+     * concurrent flushes never overwrite each other.
+     */
+    @Modifying
+    @Query("UPDATE Post p SET p.viewCount = p.viewCount + :delta WHERE p.id = :id")
+    void incrementViewCount(@Param("id") UUID id, @Param("delta") long delta);
 }
+

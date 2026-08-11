@@ -13,14 +13,12 @@ import java.util.List;
 @RequiredArgsConstructor
 public class TagController {
 
-    private final TagRepository tagRepository;
+    private final TagService tagService;
 
-    /** Public — no auth required. Returns all tags ordered by name. */
+    /** Public — no auth required. Returns all tags, Redis-cached for 1 hr. */
     @GetMapping
     public ResponseEntity<ApiResponse<List<TagResponse>>> listAll() {
-        List<TagResponse> tags = tagRepository.findAll().stream()
-                .map(TagResponse::from)
-                .toList();
-        return ResponseEntity.ok(ApiResponse.ok(tags));
+        return ResponseEntity.ok(ApiResponse.ok(tagService.listAll()));
     }
 }
+

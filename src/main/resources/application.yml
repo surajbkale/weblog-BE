@@ -101,6 +101,12 @@ app:
     cloud-name: ${CLOUDINARY_CLOUD_NAME:}
     api-key: ${CLOUDINARY_API_KEY:}
     api-secret: ${CLOUDINARY_API_SECRET:}
+  cache:
+    post-list-ttl-seconds: 300        # 5 min — public post list
+    post-by-slug-ttl-seconds: 600     # 10 min — single post
+    tags-ttl-seconds: 3600            # 1 hr — tag list (rarely changes)
+    categories-ttl-seconds: 3600      # 1 hr — category list
+    view-flush-interval-ms: 300000    # 5 min — how often view counts flush to DB
 
 
 # ── Logging ─────────────────────────────────────────────────────────────────
