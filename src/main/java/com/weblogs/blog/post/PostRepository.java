@@ -87,6 +87,9 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
     @Query("SELECT COUNT(c) FROM Comment c WHERE c.post.id = :postId AND c.deleted = false")
     long countCommentsByPostId(@Param("postId") UUID postId);
 
+    /** Counts posts matching the given status that are not soft-deleted. Used by admin stats. */
+    long countByStatusAndDeletedFalse(PostStatus status);
+
     // ── View count flush (called by ViewCountService scheduler) ──────────────
 
     /**
@@ -97,5 +100,26 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
     @Modifying
     @Query("UPDATE Post p SET p.viewCount = p.viewCount + :delta WHERE p.id = :id")
     void incrementViewCount(@Param("id") UUID id, @Param("delta") long delta);
+
+    // ── Admin queries ─────────────────────────────────────────────────────────
+
+    /**
+     * Returns all posts for the admin panel — all statuses, including soft-deleted.
+     * Optionally filtered by {@code status} (pass {@code null} to return everything).
+     */
+    @Query("""
+            SELECT p FROM Post p
+            WHERE (:status IS NULL OR p.status = :status)
+            ORDER BY p.createdAt DESC
+            """)
+    Page<Post> findAllForAdmin(@Param("status") PostStatus status, Pageable pageable);
+
+    /**
+     * Permanently removes a post row.
+     * Associated likes and comments are cleaned up via ON DELETE CASCADE.
+     */
+    @Modifying
+    @Query("DELETE FROM Post p WHERE p.id = :id")
+    void hardDeleteById(@Param("id") UUID id);
 }
 

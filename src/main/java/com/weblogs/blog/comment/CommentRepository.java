@@ -21,4 +21,7 @@ public interface CommentRepository extends JpaRepository<Comment, UUID> {
             ORDER BY c.createdAt ASC
             """)
     Page<Comment> findByPostId(@Param("postId") UUID postId, Pageable pageable);
+
+    /** Total non-deleted comment count — used by the admin stats endpoint. */
+    long countByDeletedFalse();
 }

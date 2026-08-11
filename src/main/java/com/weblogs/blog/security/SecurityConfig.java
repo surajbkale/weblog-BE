@@ -60,6 +60,8 @@ public class SecurityConfig {
                     "/api/v1/categories",
                     "/api/v1/tags"
                 ).permitAll()
+                // Admin-only endpoints — ROLE_ADMIN required at URL level
+                .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated()
             )
             .oauth2Login(oauth2 -> oauth2
