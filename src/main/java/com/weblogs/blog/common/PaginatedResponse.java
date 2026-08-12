@@ -13,7 +13,8 @@ import java.util.List;
  *   "page": 0,
  *   "size": 20,
  *   "totalElements": 100,
- *   "totalPages": 5
+ *   "totalPages": 5,
+ *   "last": false
  * }
  * </pre>
  */
@@ -22,7 +23,8 @@ public record PaginatedResponse<T>(
         int page,
         int size,
         long totalElements,
-        int totalPages
+        int totalPages,
+        boolean last
 ) {
     /** Convenience factory from a Spring Data {@link Page}. */
     public static <T> PaginatedResponse<T> from(Page<T> page) {
@@ -31,7 +33,8 @@ public record PaginatedResponse<T>(
                 page.getNumber(),
                 page.getSize(),
                 page.getTotalElements(),
-                page.getTotalPages()
+                page.getTotalPages(),
+                page.isLast()
         );
     }
 }
