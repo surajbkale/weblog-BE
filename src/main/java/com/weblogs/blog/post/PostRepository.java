@@ -56,9 +56,12 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
                 CASE WHEN :sort = 'relevance' AND CAST(:q AS TEXT) IS NOT NULL THEN
                     ts_rank(p.search_vector, plainto_tsquery('english', CAST(:q AS TEXT)))
                 END DESC NULLS LAST,
-                CASE WHEN :sort NOT IN ('mostLiked', 'relevance') THEN
+                CASE WHEN :sort NOT IN ('mostLiked', 'relevance', 'oldest') THEN
                     p.published_at
-                END DESC NULLS LAST
+                END DESC NULLS LAST,
+                CASE WHEN :sort = 'oldest' THEN
+                    p.published_at
+                END ASC NULLS LAST
             """,
             countQuery = """
             SELECT COUNT(p.id)

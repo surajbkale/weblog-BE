@@ -254,18 +254,24 @@ public class AuthService {
     private void setRefreshCookie(HttpServletResponse response, String rawToken) {
         ResponseCookie cookie = ResponseCookie.from(REFRESH_COOKIE_NAME, rawToken)
                 .httpOnly(true)
-                // NOTE: Set secure=true in production (requires HTTPS).
-                // For local dev over HTTP, set to false in application-local.yml.
                 .secure(true)
-                // SameSite=Lax works when frontend and backend share the same registrable
-                // domain.
-                // Change to SameSite=None (+ Secure=true) if they are on genuinely different
-                // origins in prod.
                 .sameSite("Lax")
-                .path("/api/v1/auth") // Scoped — cookie only sent to auth endpoints
+                .path("/api/v1/auth")
                 .maxAge(REFRESH_TOKEN_TTL)
                 .build();
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+
+        // FIX #16: Readable hint cookie so the frontend can skip the refresh call
+        // when the user has no session at all (avoids two wasted API calls on every
+        // public page for guests).
+        ResponseCookie hint = ResponseCookie.from("session_hint", "1")
+                .httpOnly(false)       // must be JS-readable
+                .secure(false)         // same as above — relax for local dev
+                .sameSite("Lax")
+                .path("/")
+                .maxAge(REFRESH_TOKEN_TTL)
+                .build();
+        response.addHeader(HttpHeaders.SET_COOKIE, hint.toString());
     }
 
     private void clearRefreshCookie(HttpServletResponse response) {
@@ -277,5 +283,15 @@ public class AuthService {
                 .maxAge(Duration.ZERO)
                 .build();
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+
+        // Clear the hint cookie on logout
+        ResponseCookie hint = ResponseCookie.from("session_hint", "")
+                .httpOnly(false)
+                .secure(false)
+                .sameSite("Lax")
+                .path("/")
+                .maxAge(Duration.ZERO)
+                .build();
+        response.addHeader(HttpHeaders.SET_COOKIE, hint.toString());
     }
 }

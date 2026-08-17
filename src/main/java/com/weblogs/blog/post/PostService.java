@@ -168,6 +168,7 @@ public class PostService {
         String normalizedSort = switch (sort == null ? "newest" : sort.toLowerCase()) {
             case "popular", "mostliked" -> "mostLiked";
             case "relevance"            -> "relevance";
+            case "oldest"               -> "oldest";
             default                     -> (normalizedQ != null) ? "relevance" : "newest";
         };
 
