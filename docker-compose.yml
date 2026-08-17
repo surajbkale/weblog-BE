@@ -13,7 +13,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d blog"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d blog" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -32,7 +32,7 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -62,20 +62,22 @@ services:
       SPRING_PROFILES_ACTIVE: docker
 
   # ── Next.js Frontend ──────────────────────────────────────────────────────────
-  # Build the frontend image from its own repo directory.
-  # Adjust the `context` path if you keep both repos side-by-side.
   frontend:
     build:
-      context: ../weblog          # path to the frontend repo root
+      context: ../weblog
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: http://localhost:8080   # browser-visible URL
+        NEXT_PUBLIC_API_URL: http://localhost:8080 # baked into client-side JS (browser URL)
     container_name: blog-frontend
     restart: unless-stopped
     depends_on:
       - api
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # lets container reach host's localhost
     environment:
-      NEXT_PUBLIC_API_URL: http://api:8080           # server-side rendering URL
+      # SSR fetches (server component) use this URL inside the container.
+      # NEXT_PUBLIC_API_URL is NOT used here since it was baked at build time.
+      INTERNAL_API_URL: http://host.docker.internal:8080
     ports:
       - "3000:3000"
     networks:
