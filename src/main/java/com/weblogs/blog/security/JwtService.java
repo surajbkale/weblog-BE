@@ -35,7 +35,8 @@ public class JwtService {
                 .claim("email", user.getEmail())
                 .claim("role", user.getRole().name())
                 .claim("displayName", user.getDisplayName())
-                .claim("active", user.isActive())   // checked in JwtAuthFilter — no DB hit
+                .claim("active", user.isActive())          // H-5: no DB hit in filter
+                .claim("emailVerified", user.isEmailVerified()) // H-5: prevent hardcode
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(now.plus(accessTokenExpiry)))
                 .signWith(getSigningKey())
@@ -70,6 +71,12 @@ public class JwtService {
     public boolean extractActive(Claims claims) {
         Boolean active = claims.get("active", Boolean.class);
         return active == null || active; // treat missing claim as active (backward-compat)
+    }
+
+    /** Returns true if the user's email was verified at token issuance. */
+    public boolean extractEmailVerified(Claims claims) {
+        Boolean verified = claims.get("emailVerified", Boolean.class);
+        return verified != null && verified; // treat missing claim as unverified (safe default)
     }
 
     public long getAccessTokenExpirySeconds() {

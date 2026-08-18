@@ -62,7 +62,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     .id(userId)
                     .email(email)
                     .role(Role.valueOf(role))
-                    .emailVerified(true)
+                    .emailVerified(jwtService.extractEmailVerified(claims)) // H-5: from claim
                     .active(true)
                     .build();
 

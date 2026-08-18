@@ -18,6 +18,7 @@ public class AppProperties {
     private RateLimit rateLimit = new RateLimit();
     private Cloudinary cloudinary = new Cloudinary();
     private Cache cache = new Cache();
+    private Cookies cookies = new Cookies();
 
     @Getter
     @Setter
@@ -60,6 +61,18 @@ public class AppProperties {
         private int  trendingLimit          = 10;     // max posts in trending list
         private int  featuredLimit          = 10;     // max posts in featured list
         private int  feedLimit              = 20;     // posts included in RSS feed
+    }
+
+    /**
+     * Cookie security settings.
+     * Set {@code app.cookies.secure=false} in local dev (or via COOKIES_SECURE env var)
+     * to allow cookies over plain HTTP. Production should always leave this {@code true}.
+     */
+    @Getter
+    @Setter
+    public static class Cookies {
+        /** When true, all auth cookies are flagged Secure (HTTPS-only). Default: true. */
+        private boolean secure = true;
     }
 }
 

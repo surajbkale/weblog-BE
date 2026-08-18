@@ -1,6 +1,7 @@
 package com.weblogs.blog.auth;
 
 import com.weblogs.blog.auth.dto.*;
+import com.weblogs.blog.config.AppProperties;
 import com.weblogs.blog.exception.EmailNotVerifiedException;
 import com.weblogs.blog.exception.InvalidTokenException;
 import com.weblogs.blog.exception.RateLimitExceededException;
@@ -38,6 +39,7 @@ public class AuthService {
     private final JwtService jwtService;
     private final RateLimiter rateLimiter;
     private final MailService mailService;
+    private final AppProperties appProperties;
     private final SecureRandom secureRandom = new SecureRandom();
 
     // ── Register ──────────────────────────────────────────────────────────────
@@ -252,21 +254,22 @@ public class AuthService {
     }
 
     private void setRefreshCookie(HttpServletResponse response, String rawToken) {
+        boolean secureCookies = appProperties.getCookies().isSecure();
         ResponseCookie cookie = ResponseCookie.from(REFRESH_COOKIE_NAME, rawToken)
                 .httpOnly(true)
-                .secure(true)
+                .secure(secureCookies)
                 .sameSite("Lax")
                 .path("/api/v1/auth")
                 .maxAge(REFRESH_TOKEN_TTL)
                 .build();
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
 
-        // FIX #16: Readable hint cookie so the frontend can skip the refresh call
+        // Readable hint cookie so the frontend can skip the refresh call
         // when the user has no session at all (avoids two wasted API calls on every
-        // public page for guests).
+        // public page for guests). Not HttpOnly — must be JS-readable.
         ResponseCookie hint = ResponseCookie.from("session_hint", "1")
-                .httpOnly(false)       // must be JS-readable
-                .secure(false)         // same as above — relax for local dev
+                .httpOnly(false)              // must be JS-readable
+                .secure(secureCookies)        // matches refresh cookie security level
                 .sameSite("Lax")
                 .path("/")
                 .maxAge(REFRESH_TOKEN_TTL)
@@ -275,9 +278,10 @@ public class AuthService {
     }
 
     private void clearRefreshCookie(HttpServletResponse response) {
+        boolean secureCookies = appProperties.getCookies().isSecure();
         ResponseCookie cookie = ResponseCookie.from(REFRESH_COOKIE_NAME, "")
                 .httpOnly(true)
-                .secure(true)
+                .secure(secureCookies)
                 .sameSite("Lax")
                 .path("/api/v1/auth")
                 .maxAge(Duration.ZERO)
@@ -287,7 +291,7 @@ public class AuthService {
         // Clear the hint cookie on logout
         ResponseCookie hint = ResponseCookie.from("session_hint", "")
                 .httpOnly(false)
-                .secure(false)
+                .secure(secureCookies)
                 .sameSite("Lax")
                 .path("/")
                 .maxAge(Duration.ZERO)
