@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/tags")
@@ -20,5 +21,15 @@ public class TagController {
     public ResponseEntity<ApiResponse<List<TagResponse>>> listAll() {
         return ResponseEntity.ok(ApiResponse.ok(tagService.listAll()));
     }
-}
 
+    /**
+     * ADMIN only — permanently deletes a tag by ID.
+     * Posts that reference this tag will have it removed automatically (DB CASCADE).
+     * The tag list cache is evicted immediately.
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<ApiResponse<Void>> delete(@PathVariable UUID id) {
+        tagService.delete(id);
+        return ResponseEntity.ok(ApiResponse.ok(null));
+    }
+}

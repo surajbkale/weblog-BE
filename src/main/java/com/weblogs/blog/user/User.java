@@ -53,6 +53,15 @@ public class User implements UserDetails {
     @Column(name = "email_verified", nullable = false)
     private boolean emailVerified;
 
+    /**
+     * Account active flag. Set to {@code false} by an admin to suspend/ban the account.
+     * A suspended user receives 401 on all authenticated requests.
+     * Defaults to {@code true} for all newly registered users.
+     */
+    @Column(nullable = false)
+    @Builder.Default
+    private boolean active = true;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     @Builder.Default

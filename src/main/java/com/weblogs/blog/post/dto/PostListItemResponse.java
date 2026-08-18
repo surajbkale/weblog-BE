@@ -12,6 +12,8 @@ import java.util.UUID;
  * Lightweight post response for paginated list views — omits {@code content}
  * to avoid shipping full post bodies across the wire.
  * Used for {@code GET /api/v1/posts} and {@code GET /api/v1/posts/me}.
+ * Reading time is estimated from the stored {@code content} so frontends
+ * can display it in list cards without fetching the full post.
  */
 public record PostListItemResponse(
         UUID   id,
@@ -23,10 +25,11 @@ public record PostListItemResponse(
         AuthorSummary author,
         List<CategoryResponse> categories,
         List<TagResponse>      tags,
-        long   likeCount,
-        long   commentCount,
-        long   viewCount,
+        long    likeCount,
+        long    commentCount,
+        long    viewCount,
         boolean likedByCurrentUser,
+        int     readingTimeMinutes,     // ceil(word_count / 200)
         Instant publishedAt,
         Instant createdAt
 ) {
@@ -48,8 +51,16 @@ public record PostListItemResponse(
                 commentCount,
                 post.getViewCount(),
                 likedByCurrentUser,
+                computeReadingTime(post.getContent()),
                 post.getPublishedAt(),
                 post.getCreatedAt()
         );
+    }
+
+    /** Estimates reading time at 200 words per minute (average adult reading speed). */
+    private static int computeReadingTime(String content) {
+        if (content == null || content.isBlank()) return 0;
+        int wordCount = content.trim().split("\\s+").length;
+        return (int) Math.max(1, Math.ceil(wordCount / 200.0));
     }
 }

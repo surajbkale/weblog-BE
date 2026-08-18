@@ -29,42 +29,47 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
         String registrationId = userRequest.getClientRegistration().getRegistrationId();
         AuthProvider provider = AuthProvider.valueOf(registrationId.toUpperCase());
 
-        String email      = extractEmail(provider, attributes);
-        String providerId = extractProviderId(provider, attributes);
-        String name       = extractDisplayName(attributes);
-        String avatarUrl  = extractAvatarUrl(provider, attributes);
+        String providerId      = extractProviderId(provider, attributes);
+        String email           = extractEmail(provider, attributes, providerId);
+        String name            = extractDisplayName(attributes);
+        String avatarUrl       = extractAvatarUrl(provider, attributes);
+        boolean syntheticEmail = isSyntheticEmail(email);
 
-        User user = resolveUser(email, provider, providerId, name, avatarUrl);
+        User user = resolveUser(email, syntheticEmail, provider, providerId, name, avatarUrl);
         return new CustomOAuth2User(user, attributes);
     }
 
-    private User resolveUser(String email, AuthProvider provider,
+    private User resolveUser(String email, boolean syntheticEmail, AuthProvider provider,
                              String providerId, String name, String avatarUrl) {
-        // 1) Existing OAuth identity match
+        // 1) Existing OAuth identity match (always try first — no email needed)
         Optional<User> byProvider = userRepository.findByProviderIdAndAuthProvider(providerId, provider);
         if (byProvider.isPresent()) {
             return byProvider.get();
         }
 
-        // 2) Email match on a LOCAL account → link OAuth identity
-        Optional<User> byEmail = userRepository.findByEmail(email);
-        if (byEmail.isPresent()) {
-            User existing = byEmail.get();
-            log.info("Linking {} identity to existing LOCAL account: {}", provider, email);
-            existing.setProviderId(providerId);
-            existing.setEmailVerified(true);
-            if (existing.getAvatarUrl() == null) existing.setAvatarUrl(avatarUrl);
-            return userRepository.save(existing);
+        // 2) Email match on a LOCAL account → link OAuth identity.
+        //    Only attempt when we have a real email (not a synthetic noreply address).
+        if (!syntheticEmail) {
+            Optional<User> byEmail = userRepository.findByEmail(email);
+            if (byEmail.isPresent()) {
+                User existing = byEmail.get();
+                log.info("Linking {} identity to existing LOCAL account: {}", provider, email);
+                existing.setProviderId(providerId);
+                existing.setEmailVerified(true);
+                if (existing.getAvatarUrl() == null) existing.setAvatarUrl(avatarUrl);
+                return userRepository.save(existing);
+            }
         }
 
         // 3) Brand-new user
+        log.debug("Creating new user via {} OAuth. email={} synthetic={}", provider, email, syntheticEmail);
         User newUser = User.builder()
                 .email(email)
                 .displayName(name)
                 .avatarUrl(avatarUrl)
                 .authProvider(provider)
                 .providerId(providerId)
-                .emailVerified(true)   // provider already verified the email
+                .emailVerified(!syntheticEmail)   // real email = already verified by provider
                 .role(Role.USER)
                 .build();
         return userRepository.save(newUser);
@@ -72,12 +77,42 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
 
     // ── Attribute extraction ──────────────────────────────────────────────────
 
-    private String extractEmail(AuthProvider provider, Map<String, Object> attrs) {
+    /**
+     * Extract the email from OAuth attributes.
+     * <p>
+     * GitHub users may have their email set to private, in which case the API returns
+     * {@code null}. We synthesise a stable noreply address in that case:
+     * {@code {providerId}+{login}@users.noreply.github.com}
+     * (the same pattern GitHub uses for git commit noreply addresses).
+     * </p>
+     */
+    private String extractEmail(AuthProvider provider, Map<String, Object> attrs, String providerId) {
         return switch (provider) {
-            case GOOGLE -> (String) attrs.get("email");
-            case GITHUB -> (String) attrs.get("email");
+            case GOOGLE -> {
+                String email = (String) attrs.get("email");
+                if (email == null || email.isBlank()) {
+                    throw new OAuth2AuthenticationException("Google OAuth did not return an email address");
+                }
+                yield email.trim().toLowerCase();
+            }
+            case GITHUB -> {
+                String email = (String) attrs.get("email");
+                if (email != null && !email.isBlank()) {
+                    yield email.trim().toLowerCase();
+                }
+                // GitHub private-email fallback — stable and unique per GitHub user ID
+                String login    = String.valueOf(attrs.getOrDefault("login", providerId));
+                String synthetic = providerId + "+" + login + "@users.noreply.github.com";
+                log.debug("GitHub user has private email; using synthetic address: {}", synthetic);
+                yield synthetic;
+            }
             default -> throw new OAuth2AuthenticationException("Unsupported provider: " + provider);
         };
+    }
+
+    /** Returns {@code true} when the email was synthesised (not a real user-provided address). */
+    private boolean isSyntheticEmail(String email) {
+        return email != null && email.endsWith("@users.noreply.github.com");
     }
 
     private String extractProviderId(AuthProvider provider, Map<String, Object> attrs) {

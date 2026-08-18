@@ -159,12 +159,25 @@ public class PostService {
             Pageable pageable,
             User   currentUser   // nullable — null when unauthenticated
     ) {
-        // Only cache for anonymous callers — auth users need accurate liked state
-        boolean canUseCache = (currentUser == null);
+        // ── 1. Normalize inputs first ─────────────────────────────────────────
+        // Pass null for empty q so the SQL `:q IS NULL` branch fires correctly.
+        String normalizedQ = (q == null || q.isBlank()) ? null : q.strip();
+
+        // Normalize sort: frontend sends 'popular', SQL expects 'mostLiked'.
+        // Auto-switch to 'relevance' when a search query is present.
+        String normalizedSort = switch (sort == null ? "newest" : sort.toLowerCase()) {
+            case "popular", "mostliked" -> "mostLiked";
+            case "relevance"            -> "relevance";
+            case "oldest"               -> "oldest";
+            default                     -> (normalizedQ != null) ? "relevance" : "newest";
+        };
+
+        // ── 2. Cache lookup (anonymous only, after normalization) ─────────────
+        boolean canUseCache = (currentUser == null && normalizedQ == null); // never cache search results
         String cacheKey = null;
 
         if (canUseCache) {
-            cacheKey = buildListCacheKey(categorySlug, tagSlug, authorId, q, sort, pageable);
+            cacheKey = buildListCacheKey(categorySlug, tagSlug, authorId, normalizedQ, normalizedSort, pageable);
             Optional<PaginatedResponse<PostListItemResponse>> cached =
                     cacheService.get(cacheKey);
             if (cached.isPresent()) {
@@ -174,12 +187,13 @@ public class PostService {
             log.debug("Cache MISS: {}", cacheKey);
         }
 
+        // ── 3. Query ──────────────────────────────────────────────────────────
         Page<Post> page = postRepository.findPublished(
                 categorySlug,
                 tagSlug,
                 authorId != null ? authorId.toString() : null,
-                q,
-                sort,
+                normalizedQ,
+                normalizedSort,
                 pageable
         );
 
@@ -223,7 +237,8 @@ public class PostService {
                 return new PostResponse(hit.id(), hit.title(), hit.slug(), hit.content(),
                         hit.excerpt(), hit.coverImageUrl(), hit.status(), hit.author(),
                         hit.categories(), hit.tags(), hit.likeCount(), hit.commentCount(),
-                        hit.viewCount(), liked, hit.publishedAt(), hit.createdAt());
+                        hit.viewCount(), liked, hit.readingTimeMinutes(),
+                        hit.publishedAt(), hit.createdAt());
             }
             return hit;
         }
@@ -256,7 +271,8 @@ public class PostService {
                 return new PostResponse(base.id(), base.title(), base.slug(), base.content(),
                         base.excerpt(), base.coverImageUrl(), base.status(), base.author(),
                         base.categories(), base.tags(), base.likeCount(), base.commentCount(),
-                        base.viewCount(), true, base.publishedAt(), base.createdAt());
+                        base.viewCount(), true, base.readingTimeMinutes(),
+                        base.publishedAt(), base.createdAt());
             }
         }
         return base;

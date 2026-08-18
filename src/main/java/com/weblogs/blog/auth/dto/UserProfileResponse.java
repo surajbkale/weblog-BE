@@ -21,10 +21,15 @@ public record UserProfileResponse(
 ) {
     /** Used by UserController — requires post count fetched separately. */
     public static UserProfileResponse from(User user, long publishedPostCount) {
+        // Defensive fallback: if displayName was never set, derive it from the email prefix.
+        String safeDisplayName = (user.getDisplayName() != null && !user.getDisplayName().isBlank())
+                ? user.getDisplayName()
+                : user.getEmail().split("@")[0];
+
         return new UserProfileResponse(
                 user.getId(),
                 user.getEmail(),
-                user.getDisplayName(),
+                safeDisplayName,
                 user.getAvatarUrl(),
                 user.getBio(),
                 user.getRole(),

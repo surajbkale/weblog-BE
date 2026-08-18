@@ -7,6 +7,7 @@ import com.weblogs.blog.user.dto.PublicProfileResponse;
 import com.weblogs.blog.user.dto.UpdateProfileRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -20,10 +21,22 @@ public class UserController {
 
     private final UserService userService;
 
-    /** GET /api/v1/users/me — authenticated user's full profile */
+    /**
+     * GET /api/v1/users/me — authenticated user's full profile.
+     *
+     * <p>The JwtAuthFilter silently skips unauthenticated requests, causing
+     * Spring's AnonymousAuthenticationFilter to inject an anonymous principal.
+     * {@code @AuthenticationPrincipal User user} resolves to {@code null} for
+     * anonymous requests (type mismatch). We guard here explicitly instead of
+     * letting a NullPointerException propagate to UserService.
+     */
     @GetMapping("/me")
     public ResponseEntity<ApiResponse<UserProfileResponse>> getMe(
             @AuthenticationPrincipal User user) {
+        if (user == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResponse.error("Authentication required"));
+        }
         return ResponseEntity.ok(ApiResponse.ok(userService.getMyProfile(user)));
     }
 
@@ -32,6 +45,10 @@ public class UserController {
     public ResponseEntity<ApiResponse<UserProfileResponse>> updateMe(
             @AuthenticationPrincipal User user,
             @Valid @RequestBody UpdateProfileRequest req) {
+        if (user == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResponse.error("Authentication required"));
+        }
         return ResponseEntity.ok(ApiResponse.ok(userService.updateProfile(user, req)));
     }
 
@@ -40,6 +57,10 @@ public class UserController {
     public ResponseEntity<ApiResponse<Void>> changePassword(
             @AuthenticationPrincipal User user,
             @Valid @RequestBody ChangePasswordRequest req) {
+        if (user == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResponse.error("Authentication required"));
+        }
         userService.changePassword(user, req);
         return ResponseEntity.ok(ApiResponse.ok(null));
     }

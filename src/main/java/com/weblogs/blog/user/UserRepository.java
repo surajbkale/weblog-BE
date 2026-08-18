@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -40,4 +41,7 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             ORDER BY u.createdAt DESC
             """)
     Page<User> searchUsers(@Param("q") String q, Pageable pageable);
+
+    /** Count users registered after the given instant — used for time-series stats. */
+    long countByCreatedAtAfter(Instant since);
 }

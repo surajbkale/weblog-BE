@@ -38,39 +38,47 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
             JOIN   users u ON u.id = p.author_id
             WHERE  p.deleted  = false
               AND  p.status   = 'PUBLISHED'
-              AND  (:categorySlug IS NULL OR EXISTS (
+              AND  (CAST(:categorySlug AS TEXT) IS NULL OR EXISTS (
                        SELECT 1 FROM post_categories pc
                        JOIN   categories c ON c.id = pc.category_id
-                       WHERE  pc.post_id = p.id AND c.slug = :categorySlug))
-              AND  (:tagSlug IS NULL OR EXISTS (
+                       WHERE  pc.post_id = p.id AND c.slug = CAST(:categorySlug AS TEXT)))
+              AND  (CAST(:tagSlug AS TEXT) IS NULL OR EXISTS (
                        SELECT 1 FROM post_tags pt
                        JOIN   tags t ON t.id = pt.tag_id
-                       WHERE  pt.post_id = p.id AND t.slug = :tagSlug))
-              AND  (:authorId IS NULL OR p.author_id = CAST(:authorId AS uuid))
-              AND  (:q IS NULL OR p.search_vector @@ plainto_tsquery('english', :q))
+                       WHERE  pt.post_id = p.id AND t.slug = CAST(:tagSlug AS TEXT)))
+              AND  (CAST(:authorId AS TEXT) IS NULL OR p.author_id = CAST(:authorId AS uuid))
+              AND  (CAST(:q AS TEXT) IS NULL
+                       OR p.search_vector @@ plainto_tsquery('english', CAST(:q AS TEXT)))
             ORDER BY
                 CASE WHEN :sort = 'mostLiked' THEN
                     (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id)
                 END DESC NULLS LAST,
-                CASE WHEN :sort != 'mostLiked' OR :sort IS NULL THEN
+                CASE WHEN :sort = 'relevance' AND CAST(:q AS TEXT) IS NOT NULL THEN
+                    ts_rank(p.search_vector, plainto_tsquery('english', CAST(:q AS TEXT)))
+                END DESC NULLS LAST,
+                CASE WHEN :sort NOT IN ('mostLiked', 'relevance', 'oldest') THEN
                     p.published_at
-                END DESC NULLS LAST
+                END DESC NULLS LAST,
+                CASE WHEN :sort = 'oldest' THEN
+                    p.published_at
+                END ASC NULLS LAST
             """,
             countQuery = """
             SELECT COUNT(p.id)
             FROM   posts p
             WHERE  p.deleted  = false
               AND  p.status   = 'PUBLISHED'
-              AND  (:categorySlug IS NULL OR EXISTS (
+              AND  (CAST(:categorySlug AS TEXT) IS NULL OR EXISTS (
                        SELECT 1 FROM post_categories pc
                        JOIN   categories c ON c.id = pc.category_id
-                       WHERE  pc.post_id = p.id AND c.slug = :categorySlug))
-              AND  (:tagSlug IS NULL OR EXISTS (
+                       WHERE  pc.post_id = p.id AND c.slug = CAST(:categorySlug AS TEXT)))
+              AND  (CAST(:tagSlug AS TEXT) IS NULL OR EXISTS (
                        SELECT 1 FROM post_tags pt
                        JOIN   tags t ON t.id = pt.tag_id
-                       WHERE  pt.post_id = p.id AND t.slug = :tagSlug))
-              AND  (:authorId IS NULL OR p.author_id = CAST(:authorId AS uuid))
-              AND  (:q IS NULL OR p.search_vector @@ plainto_tsquery('english', :q))
+                       WHERE  pt.post_id = p.id AND t.slug = CAST(:tagSlug AS TEXT)))
+              AND  (CAST(:authorId AS TEXT) IS NULL OR p.author_id = CAST(:authorId AS uuid))
+              AND  (CAST(:q AS TEXT) IS NULL
+                       OR p.search_vector @@ plainto_tsquery('english', CAST(:q AS TEXT)))
             """,
             nativeQuery = true)
     Page<Post> findPublished(
@@ -163,5 +171,11 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
             ORDER BY p.publishedAt DESC
             """)
     List<Post> findLatestPublished(Pageable pageable);
-}
 
+    /** Count non-deleted posts created after the given instant — used for time-series stats. */
+    long countByCreatedAtAfterAndDeletedFalse(Instant since);
+
+    /** Sum of all view_count values across all published non-deleted posts. */
+    @Query("SELECT COALESCE(SUM(p.viewCount), 0) FROM Post p WHERE p.deleted = false")
+    long sumAllViewCounts();
+}

@@ -1,0 +1,35 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# application-docker.yml
+# Active when SPRING_PROFILES_ACTIVE=docker (set by docker-compose.yml).
+#
+# The api service uses network_mode: host so it shares the host network stack.
+# That means postgres and redis are reachable at localhost on their host-bound
+# ports (5432 and 6379), just like when running locally.
+# ──────────────────────────────────────────────────────────────────────────────
+
+spring:
+  # ── Datasource ──────────────────────────────────────────────────────────────
+  datasource:
+    url: jdbc:postgresql://localhost:5432/blog
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 30000
+      initialization-fail-timeout: -1   # retry indefinitely until postgres is up
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: ${REDIS_PASSWORD:}
+      timeout: 5000ms
+
+  session:
+    store-type: none
+
+# ── Application URL overrides ────────────────────────────────────────────────
+app:
+  frontend-url: ${FRONTEND_URL:http://localhost:3000}
+  site-url: ${SITE_URL:http://localhost:8080}

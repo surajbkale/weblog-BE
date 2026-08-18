@@ -1,4 +1,5 @@
 services:
+  # ── PostgreSQL ────────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: blog-postgres
@@ -20,6 +21,7 @@ services:
     networks:
       - blog-net
 
+  # ── Redis ─────────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: blog-redis
@@ -35,6 +37,49 @@ services:
       timeout: 3s
       retries: 5
       start_period: 5s
+    networks:
+      - blog-net
+
+  # ── Spring Boot API ───────────────────────────────────────────────────────────
+  # network_mode: host lets the container share the host's network stack.
+  # Postgres and Redis are reachable at localhost:5432 / localhost:6379
+  # (via their host-bound ports), bypassing Docker DNS entirely.
+  # Note: `ports` and `networks` are incompatible with network_mode: host.
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: blog-api
+    restart: on-failure
+    network_mode: host
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+
+  # ── Next.js Frontend ──────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ../weblog
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8080 # baked into client-side JS (browser URL)
+    container_name: blog-frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # lets container reach host's localhost
+    environment:
+      # SSR fetches (server component) use this URL inside the container.
+      # NEXT_PUBLIC_API_URL is NOT used here since it was baked at build time.
+      INTERNAL_API_URL: http://host.docker.internal:8080
+    ports:
+      - "3000:3000"
     networks:
       - blog-net
 

@@ -67,4 +67,25 @@ public class CommentController {
         commentService.deleteComment(id, currentUser);
         return ResponseEntity.ok(ApiResponse.ok("Comment deleted"));
     }
+
+    // ── List replies to a comment (public) ───────────────────────────
+
+    /**
+     * GET /api/v1/comments/{id}/replies
+     *
+     * <p>Returns a paginated list of direct replies to the specified parent comment.
+     * Public — no authentication required (ensure this route is whitelisted in SecurityConfig),
+     * same as the flat post-comment list.
+     * Soft-deleted replies are included so the frontend can render "[deleted]" stubs
+     * and keep thread depth/ordering intact.
+     */
+    @GetMapping("/api/v1/comments/{id}/replies")
+    public ResponseEntity<ApiResponse<PaginatedResponse<CommentResponse>>> listReplies(
+            @PathVariable UUID id,
+            @RequestParam(defaultValue = "0")  int page,
+            @RequestParam(defaultValue = "50") int size) {
+
+        Pageable pageable = PageRequest.of(page, Math.min(size, 100));
+        return ResponseEntity.ok(ApiResponse.ok(commentService.listReplies(id, pageable)));
+    }
 }

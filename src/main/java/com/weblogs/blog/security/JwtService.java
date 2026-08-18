@@ -35,6 +35,7 @@ public class JwtService {
                 .claim("email", user.getEmail())
                 .claim("role", user.getRole().name())
                 .claim("displayName", user.getDisplayName())
+                .claim("active", user.isActive())   // checked in JwtAuthFilter — no DB hit
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(now.plus(accessTokenExpiry)))
                 .signWith(getSigningKey())
@@ -63,6 +64,12 @@ public class JwtService {
 
     public String extractRole(Claims claims) {
         return claims.get("role", String.class);
+    }
+
+    /** Returns {@code false} when the account has been suspended by an admin. */
+    public boolean extractActive(Claims claims) {
+        Boolean active = claims.get("active", Boolean.class);
+        return active == null || active; // treat missing claim as active (backward-compat)
     }
 
     public long getAccessTokenExpirySeconds() {

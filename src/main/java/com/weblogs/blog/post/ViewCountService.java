@@ -58,7 +58,17 @@ public class ViewCountService {
 
     /**
      * Reads all dirty view counters from Redis, applies them to Postgres with an
-     * additive UPDATE (never overwrites), then clears the Redis state.
+     * additive UPDATE (never overwrites), then removes each postId from the dirty
+     * set only after its flush succeeds.
+     *
+     * <p><b>Bug fix (previously):</b> The dirty set used to be deleted in a single
+     * blanket call at the end of the loop. If any individual post flush failed
+     * (e.g. post was hard-deleted, DB transient error), those postIds were silently
+     * removed from the dirty set and their view counts were permanently lost.
+     *
+     * <p>Now each postId is removed from {@code view:dirty:posts} individually and
+     * only on success. Failed postIds remain in the set and are retried on the next
+     * scheduler cycle.
      *
      * <p>Scheduled with a fixed delay (not rate) so flushes never overlap.
      * Initial delay = flush interval to avoid an empty flush on cold start.
@@ -80,34 +90,48 @@ public class ViewCountService {
         }
 
         log.debug("Flushing view counts for {} posts", postIds.size());
-        int flushed = 0;
+        int flushed  = 0;
+        int skipped  = 0;
+        int failed   = 0;
 
         for (String postIdStr : postIds) {
             String counterKey = VIEW_PREFIX + postIdStr;
             try {
-                // GET + DELETE atomically enough for our soft metric use case.
-                // For strict consistency a Lua script would be needed, but view
-                // counts are approximate by nature.
                 String raw = redisTemplate.opsForValue().get(counterKey);
-                if (raw == null) continue;
+                if (raw == null) {
+                    // Counter already gone (e.g. evicted) — just clean up dirty-set entry
+                    redisTemplate.opsForSet().remove(DIRTY_SET_KEY, postIdStr);
+                    skipped++;
+                    continue;
+                }
 
                 long delta = Long.parseLong(raw);
-                if (delta <= 0) continue;
+                if (delta <= 0) {
+                    redisTemplate.opsForSet().remove(DIRTY_SET_KEY, postIdStr);
+                    skipped++;
+                    continue;
+                }
 
                 postRepository.incrementViewCount(UUID.fromString(postIdStr), delta);
+
+                // SUCCESS — remove from dirty set and delete counter key.
+                // Order matters: delete the counter BEFORE removing from the dirty set
+                // so that a crash between these two lines leaves the entry in the set
+                // (safe retry) rather than losing the counter reference.
                 redisTemplate.delete(counterKey);
+                redisTemplate.opsForSet().remove(DIRTY_SET_KEY, postIdStr);
                 flushed++;
+
             } catch (Exception e) {
+                // Leave this postId in the dirty set — it will be retried next cycle.
+                // This is the critical difference from the old behaviour: we do NOT
+                // delete DIRTY_SET_KEY at the end, so failed entries are preserved.
+                failed++;
                 log.warn("Failed to flush view count for postId={}: {}", postIdStr, e.getMessage());
             }
         }
 
-        try {
-            redisTemplate.delete(DIRTY_SET_KEY);
-        } catch (Exception e) {
-            log.warn("Failed to clear dirty view set: {}", e.getMessage());
-        }
-
-        log.info("View count flush complete: {} posts updated", flushed);
+        log.info("View count flush complete: {} flushed, {} skipped, {} failed (will retry)",
+                flushed, skipped, failed);
     }
 }
