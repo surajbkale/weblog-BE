@@ -163,6 +163,13 @@ public class PostService {
         // Pass null for empty q so the SQL `:q IS NULL` branch fires correctly.
         String normalizedQ = (q == null || q.isBlank()) ? null : q.strip();
 
+        // M-3: Validate sort parameter — reject unknown values with a clear error.
+        Set<String> validSorts = Set.of("newest", "oldest", "popular", "mostliked", "relevance");
+        if (sort != null && !validSorts.contains(sort.toLowerCase())) {
+            throw new IllegalArgumentException(
+                "Invalid sort value '" + sort + "'. Allowed: newest, oldest, popular, relevance");
+        }
+
         // Normalize sort: frontend sends 'popular', SQL expects 'mostLiked'.
         // Auto-switch to 'relevance' when a search query is present.
         String normalizedSort = switch (sort == null ? "newest" : sort.toLowerCase()) {
@@ -197,8 +204,16 @@ public class PostService {
                 pageable
         );
 
-        PaginatedResponse<PostListItemResponse> result =
-                PaginatedResponse.from(page.map(post -> toListItemResponse(post, currentUser)));
+        // H-1: Batch-fetch counts (3 queries total instead of 3×pageSize)
+        List<PostListItemResponse> items = batchMapListItems(page.getContent(), currentUser);
+        PaginatedResponse<PostListItemResponse> result = new PaginatedResponse<>(
+                items,
+                page.getNumber(),
+                page.getSize(),
+                page.getTotalElements(),
+                page.getTotalPages(),
+                page.isLast()
+        );
 
         if (canUseCache && cacheKey != null) {
             cacheService.putListCache(cacheKey, result,
@@ -283,7 +298,10 @@ public class PostService {
     @Transactional(readOnly = true)
     public PaginatedResponse<PostListItemResponse> getMyPosts(User currentUser, Pageable pageable) {
         Page<Post> page = postRepository.findByAuthorId(currentUser.getId(), pageable);
-        return PaginatedResponse.from(page.map(post -> toListItemResponse(post, currentUser)));
+        // H-1: use batch helper to avoid N+1
+        List<PostListItemResponse> items = batchMapListItems(page.getContent(), currentUser);
+        return new PaginatedResponse<>(items, page.getNumber(), page.getSize(),
+                page.getTotalElements(), page.getTotalPages(), page.isLast());
     }
 
     // ── Trending ─────────────────────────────────────────────────────
@@ -307,11 +325,9 @@ public class PostService {
         int limit      = appProperties.getCache().getTrendingLimit();
         Instant since  = Instant.now().minus(Duration.ofDays(windowDays));
 
-        List<PostListItemResponse> result = postRepository
-                .findTrending(since, PageRequest.of(0, limit))
-                .stream()
-                .map(post -> toListItemResponse(post, null))
-                .toList();
+        List<PostListItemResponse> result = batchMapListItems(
+                postRepository.findTrending(since, PageRequest.of(0, limit)),
+                null);
 
         cacheService.put(CacheService.TRENDING_POSTS, result,
                 Duration.ofSeconds(appProperties.getCache().getTrendingTtlSeconds()));
@@ -336,11 +352,9 @@ public class PostService {
         log.debug("Cache MISS: {}", CacheService.FEATURED_POSTS);
 
         int limit = appProperties.getCache().getFeaturedLimit();
-        List<PostListItemResponse> result = postRepository
-                .findFeatured(PageRequest.of(0, limit))
-                .stream()
-                .map(post -> toListItemResponse(post, null))
-                .toList();
+        List<PostListItemResponse> result = batchMapListItems(
+                postRepository.findFeatured(PageRequest.of(0, limit)),
+                null);
 
         cacheService.put(CacheService.FEATURED_POSTS, result,
                 Duration.ofSeconds(appProperties.getCache().getFeaturedTtlSeconds()));
@@ -458,12 +472,37 @@ public class PostService {
         return PostResponse.from(post, likeCount, commentCount, liked);
     }
 
-    private PostListItemResponse toListItemResponse(Post post, User currentUser) {
-        long likeCount    = postRepository.countLikesByPostId(post.getId());
-        long commentCount = postRepository.countCommentsByPostId(post.getId());
-        boolean liked     = currentUser != null
-                && likeRepository.existsByPostIdAndUserId(post.getId(), currentUser.getId());
-        return PostListItemResponse.from(post, likeCount, commentCount, liked);
+    /**
+     * H-1 fix: Batch-maps a list of posts to DTOs using 3 queries total regardless
+     * of list size — one for like counts, one for comment counts, one for liked IDs.
+     * This replaces the old {@code toListItemResponse} which fired 3 queries per post.
+     */
+    private List<PostListItemResponse> batchMapListItems(List<Post> posts, User currentUser) {
+        if (posts.isEmpty()) return List.of();
+
+        List<UUID> postIds = posts.stream().map(Post::getId).toList();
+
+        // Query 1: like counts for all posts
+        Map<UUID, Long> likeCounts = new HashMap<>();
+        postRepository.findLikeCountsByPostIds(postIds)
+                .forEach(row -> likeCounts.put((UUID) row[0], (Long) row[1]));
+
+        // Query 2: comment counts for all posts
+        Map<UUID, Long> commentCounts = new HashMap<>();
+        postRepository.findCommentCountsByPostIds(postIds)
+                .forEach(row -> commentCounts.put((UUID) row[0], (Long) row[1]));
+
+        // Query 3: which posts the current user has liked (empty set for anonymous)
+        Set<UUID> likedPostIds = currentUser == null
+                ? Set.of()
+                : new HashSet<>(postRepository.findLikedPostIds(currentUser.getId(), postIds));
+
+        return posts.stream().map(post -> PostListItemResponse.from(
+                post,
+                likeCounts.getOrDefault(post.getId(), 0L),
+                commentCounts.getOrDefault(post.getId(), 0L),
+                likedPostIds.contains(post.getId())
+        )).toList();
     }
 }
 

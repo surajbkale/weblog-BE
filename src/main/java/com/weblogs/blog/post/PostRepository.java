@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -96,6 +97,29 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
 
     @Query("SELECT COUNT(c) FROM Comment c WHERE c.post.id = :postId AND c.deleted = false")
     long countCommentsByPostId(@Param("postId") UUID postId);
+
+    // ── Batch count queries (N+1 fix for list views) ──────────────────────────
+
+    /**
+     * Returns [postId, likeCount] pairs for all supplied post IDs in a single query.
+     * Used by PostService to batch-load like counts for a page of posts.
+     */
+    @Query("SELECT l.post.id, COUNT(l) FROM Like l WHERE l.post.id IN :postIds GROUP BY l.post.id")
+    List<Object[]> findLikeCountsByPostIds(@Param("postIds") Collection<UUID> postIds);
+
+    /**
+     * Returns [postId, commentCount] pairs for all supplied post IDs in a single query.
+     * Used by PostService to batch-load comment counts for a page of posts.
+     */
+    @Query("SELECT c.post.id, COUNT(c) FROM Comment c WHERE c.post.id IN :postIds AND c.deleted = false GROUP BY c.post.id")
+    List<Object[]> findCommentCountsByPostIds(@Param("postIds") Collection<UUID> postIds);
+
+    /**
+     * Returns the subset of the given post IDs that the specified user has liked.
+     * Used by PostService to batch-load the likedByCurrentUser flag in a single query.
+     */
+    @Query("SELECT l.post.id FROM Like l WHERE l.post.id IN :postIds AND l.user.id = :userId")
+    List<UUID> findLikedPostIds(@Param("userId") UUID userId, @Param("postIds") Collection<UUID> postIds);
 
     /** Counts posts matching the given status that are not soft-deleted. Used by admin stats. */
     long countByStatusAndDeletedFalse(PostStatus status);
