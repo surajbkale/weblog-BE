@@ -1,0 +1,65 @@
+package com.weblogs.blog.post.dto;
+
+import com.weblogs.blog.category.dto.CategoryResponse;
+import com.weblogs.blog.post.Post;
+import com.weblogs.blog.tag.dto.TagResponse;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
+
+/**
+ * Full post response — includes {@code content}.
+ * Used for single-post retrieval ({@code GET /api/v1/posts/{slug}}).
+ */
+public record PostResponse(
+        UUID   id,
+        String title,
+        String slug,
+        String content,
+        String excerpt,
+        String coverImageUrl,
+        String status,
+        AuthorSummary author,
+        List<CategoryResponse> categories,
+        List<TagResponse>      tags,
+        long    likeCount,
+        long    commentCount,
+        long    viewCount,
+        boolean likedByCurrentUser,
+        int     readingTimeMinutes,     // ceil(word_count / 200)
+        Instant publishedAt,
+        Instant createdAt
+) {
+    public static PostResponse from(Post post,
+                                    long likeCount,
+                                    long commentCount,
+                                    boolean likedByCurrentUser) {
+        return new PostResponse(
+                post.getId(),
+                post.getTitle(),
+                post.getSlug(),
+                post.getContent(),
+                post.getExcerpt(),
+                post.getCoverImageUrl(),
+                post.getStatus().name(),
+                AuthorSummary.from(post.getAuthor()),
+                post.getCategories().stream().map(CategoryResponse::from).toList(),
+                post.getTags().stream().map(TagResponse::from).toList(),
+                likeCount,
+                commentCount,
+                post.getViewCount(),
+                likedByCurrentUser,
+                computeReadingTime(post.getContent()),
+                post.getPublishedAt(),
+                post.getCreatedAt()
+        );
+    }
+
+    /** Estimates reading time at 200 words per minute (average adult reading speed). */
+    private static int computeReadingTime(String content) {
+        if (content == null || content.isBlank()) return 0;
+        int wordCount = content.trim().split("\\s+").length;
+        return (int) Math.max(1, Math.ceil(wordCount / 200.0));
+    }
+}
