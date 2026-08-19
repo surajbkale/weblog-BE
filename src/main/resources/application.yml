@@ -27,6 +27,9 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: false
+    out-of-order: false            # never run migrations out of version order
+    validate-on-migrate: true      # default, but explicit for clarity
+    connect-retries: 5             # retry DB connection if Neon compute is waking up
 
   # ── Redis (plain data-redis — no server-side sessions) ──────────────────────
   data:
