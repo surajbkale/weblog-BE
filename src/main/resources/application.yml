@@ -30,6 +30,14 @@ spring:
     out-of-order: false            # never run migrations out of version order
     validate-on-migrate: true      # default, but explicit for clarity
     connect-retries: 5             # retry DB connection if Neon compute is waking up
+    # IMPORTANT: Must use the DIRECT (non-pooler) Neon endpoint here.
+    # Neon's connection pooler (PgBouncer) runs in transaction mode which breaks
+    # Flyway's session-level advisory locks, causing migrations to be silently skipped.
+    # Set FLYWAY_URL in Render to the direct endpoint (without -pooler in the hostname).
+    url: ${FLYWAY_URL:${spring.datasource.url}}
+    user: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:}
+
 
   # ── Redis (plain data-redis — no server-side sessions) ──────────────────────
   data:
