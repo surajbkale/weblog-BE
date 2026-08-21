@@ -52,7 +52,8 @@ public class SecurityConfig {
                 .requestMatchers(
                     "/api/v1/auth/**",
                     "/oauth2/**",
-                    "/login/oauth2/**"
+                    "/login/oauth2/**",
+                    "/actuator/health"          // public — used by UptimeRobot keep-alive
                 ).permitAll()
                 // /me requires authentication — must come BEFORE the broad GET rule below
                 // so Spring Security matches it first (rules are evaluated top-to-bottom).
