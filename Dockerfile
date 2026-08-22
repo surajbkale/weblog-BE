@@ -30,4 +30,8 @@ COPY --from=builder /app/target/*.jar app.jar
 EXPOSE 8080
 
 # Pass profile via SPRING_PROFILES_ACTIVE env var (override in docker-compose)
-ENTRYPOINT ["java", "-jar", "app.jar"]
+ENTRYPOINT ["java", \
+    "-Xms128m", \
+    "-Xmx400m", \
+    "-XX:+UseContainerSupport", \
+    "-jar", "app.jar"]
