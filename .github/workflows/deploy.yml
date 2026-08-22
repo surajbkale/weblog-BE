@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 env:
-  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/weblogs-api
+  IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/weblog-api
 
 jobs:
   # ── Job 1: Build Docker image and push to Docker Hub ────────────────────────
