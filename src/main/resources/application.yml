@@ -89,11 +89,11 @@ spring:
             enable: true
             required: true
 
-  # ── Multipart (media uploads up to 5 MB) ────────────────────────────────────
+  # ── Multipart (images up to 5 MB, videos up to 50 MB) ─────────────────────
   servlet:
     multipart:
-      max-file-size: 5MB
-      max-request-size: 6MB
+      max-file-size: 50MB
+      max-request-size: 51MB
 
 # ── JWT ─────────────────────────────────────────────────────────────────────
 jwt:
