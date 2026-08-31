@@ -34,6 +34,14 @@ public class RefreshToken {
     @Builder.Default
     private boolean revoked = false;
 
+    /**
+     * Timestamp when this token was revoked (null if still active).
+     * Used to distinguish a legitimate race condition (two simultaneous
+     * refresh calls within a small window) from a true token-reuse attack.
+     */
+    @Column(name = "revoked_at")
+    private Instant revokedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default
     private Instant createdAt = Instant.now();

@@ -133,6 +133,23 @@ public class AuthService {
 
         // ── Reuse detection ───────────────────────────────────────────────────
         if (storedToken.isRevoked()) {
+            // Grace window: if the token was revoked within the last 10 seconds,
+            // treat it as a benign race condition (React Strict Mode double-invoke,
+            // fast page reload, slow network) rather than a real attack.
+            // Real reuse attacks happen minutes or hours after revocation.
+            boolean isLikelyRace = storedToken.getRevokedAt() != null &&
+                    storedToken.getRevokedAt().isAfter(Instant.now().minusSeconds(10));
+
+            if (isLikelyRace) {
+                // Silent 401 — the first call already issued a new cookie.
+                // The frontend's isRefreshing guard should prevent this path,
+                // but this is the safety net for slow networks.
+                log.debug("Refresh token race-condition detected (within grace window) for userId={}. Rejecting silently.",
+                        storedToken.getUserId());
+                throw new InvalidTokenException("Refresh token already used. Please try again.");
+            }
+
+            // Revoked OUTSIDE the grace window → real reuse attack → nuke all sessions.
             log.warn("SECURITY: Revoked refresh token reused for userId={}. Revoking all sessions.",
                     storedToken.getUserId());
             refreshTokenRepository.revokeAllActiveByUserId(storedToken.getUserId());
@@ -143,13 +160,15 @@ public class AuthService {
 
         if (storedToken.getExpiresAt().isBefore(Instant.now())) {
             storedToken.setRevoked(true);
+            storedToken.setRevokedAt(Instant.now());
             refreshTokenRepository.save(storedToken);
             clearRefreshCookie(response);
             throw new InvalidTokenException("Refresh token has expired. Please log in again.");
         }
 
-        // Revoke old token
+        // Revoke old token (stamp revokedAt for the grace-window check above)
         storedToken.setRevoked(true);
+        storedToken.setRevokedAt(Instant.now());
         refreshTokenRepository.save(storedToken);
 
         // Issue new token (rotation)
