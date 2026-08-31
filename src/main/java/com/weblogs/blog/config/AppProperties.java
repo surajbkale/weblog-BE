@@ -19,6 +19,7 @@ public class AppProperties {
     private Cloudinary cloudinary = new Cloudinary();
     private Cache cache = new Cache();
     private Cookies cookies = new Cookies();
+    private Media media = new Media();
 
     @Getter
     @Setter
@@ -73,6 +74,21 @@ public class AppProperties {
     public static class Cookies {
         /** When true, all auth cookies are flagged Secure (HTTPS-only). Default: true. */
         private boolean secure = true;
+    }
+
+    /**
+     * Media upload size limits.
+     * These values drive the application-level validation in {@code MediaService}.
+     * The Spring multipart limits in {@code spring.servlet.multipart} should be set
+     * to the same or higher values so the HTTP layer never rejects before we do.
+     */
+    @Getter
+    @Setter
+    public static class Media {
+        /** Maximum image upload size in bytes. Default: 5 MB. */
+        private long imageMaxSizeBytes = 5L * 1024 * 1024;
+        /** Maximum video upload size in bytes. Default: 50 MB. */
+        private long videoMaxSizeBytes = 50L * 1024 * 1024;
     }
 }
 

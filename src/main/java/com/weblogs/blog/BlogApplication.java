@@ -10,14 +10,24 @@ import org.springframework.scheduling.annotation.EnableAsync;
 public class BlogApplication {
 
 	public static void main(String[] args) {
-		// Load .env before Spring starts so ${VAR} placeholders in application.yml resolve.
-		// ignoreIfMissing() → no-ops in production where vars come from the OS environment.
+		// Load .env first (base config, committed to repo).
+		// Then overlay .env.local if present — local-only overrides that are
+		// NOT committed to source control (matches the Next.js convention).
+		// ignoreIfMissing() → no-ops in production where vars come from the OS env.
 		Dotenv.configure()
+				.filename(".env")
 				.ignoreIfMissing()
-				.systemProperties()   // copies every .env entry into System.setProperty()
+				.systemProperties()
+				.load();
+
+		Dotenv.configure()
+				.filename(".env.local")
+				.ignoreIfMissing()
+				.systemProperties()   // .env.local overwrites any keys already set by .env
 				.load();
 
 		SpringApplication.run(BlogApplication.class, args);
 	}
 
 }
+
