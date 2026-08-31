@@ -2,7 +2,7 @@ package com.weblogs.blog.media;
 
 import com.cloudinary.Cloudinary;
 import com.cloudinary.utils.ObjectUtils;
-import com.weblogs.blog.exception.ForbiddenException;
+import com.weblogs.blog.config.AppProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -17,17 +17,20 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class MediaService {
 
-    private static final long IMAGE_MAX_SIZE_BYTES = 5L  * 1024 * 1024;  // 5 MB
-    private static final long VIDEO_MAX_SIZE_BYTES = 50L * 1024 * 1024;  // 50 MB
-
     private static final List<String> ALLOWED_IMAGE_TYPES = List.of(
             "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"
     );
-    private static final List<String> ALLOWED_VIDEO_TYPES = List.of(
-            "video/mp4", "video/webm", "video/quicktime", "video/x-msvideo"
+
+    /**
+     * Accepted video file extensions (lower-cased). Used as a fallback when the
+     * browser sends a generic content-type such as {@code application/octet-stream}.
+     */
+    private static final List<String> ALLOWED_VIDEO_EXTENSIONS = List.of(
+            ".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v"
     );
 
-    private final Cloudinary cloudinary;
+    private final Cloudinary     cloudinary;
+    private final AppProperties  appProperties;  // single source of truth for size limits
 
     /**
      * Validates and uploads an image file to Cloudinary.
@@ -38,7 +41,7 @@ public class MediaService {
      * @throws RuntimeException         if the Cloudinary upload fails
      */
     public String upload(MultipartFile file) {
-        validateFile(file, ALLOWED_IMAGE_TYPES, IMAGE_MAX_SIZE_BYTES, "JPEG, PNG, GIF, WebP, SVG");
+        validateImage(file);
 
         try {
             @SuppressWarnings("unchecked")
@@ -69,7 +72,7 @@ public class MediaService {
      * @throws RuntimeException         if the Cloudinary upload fails
      */
     public String uploadVideo(MultipartFile file) {
-        validateFile(file, ALLOWED_VIDEO_TYPES, VIDEO_MAX_SIZE_BYTES, "MP4, WebM, MOV, AVI");
+        validateVideo(file);
 
         try {
             @SuppressWarnings("unchecked")
@@ -93,20 +96,62 @@ public class MediaService {
 
     // ── Validation ────────────────────────────────────────────────────────────
 
-    private void validateFile(MultipartFile file, List<String> allowedTypes,
-                              long maxSizeBytes, String allowedTypesLabel) {
+    private void validateImage(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("No file provided");
         }
         String contentType = file.getContentType();
-        if (contentType == null || !allowedTypes.contains(contentType)) {
+        if (contentType == null || !ALLOWED_IMAGE_TYPES.contains(contentType)) {
             throw new IllegalArgumentException(
-                    "Invalid file type. Allowed types: " + allowedTypesLabel);
+                    "Invalid file type. Allowed image types: JPEG, PNG, GIF, WebP, SVG");
         }
-        if (file.getSize() > maxSizeBytes) {
-            long limitMb = maxSizeBytes / (1024 * 1024);
+        long limitBytes = appProperties.getMedia().getImageMaxSizeBytes();
+        if (file.getSize() > limitBytes) {
+            long limitMb = limitBytes / (1024 * 1024);
             throw new IllegalArgumentException(
-                    "File size exceeds the maximum allowed limit of " + limitMb + " MB");
+                    "Image size exceeds the maximum allowed limit of " + limitMb + " MB");
+        }
+    }
+
+    /**
+     * Video-specific validation. Browsers and operating systems are inconsistent
+     * about the MIME type they report for video files:
+     *   - Some send  video/mp4;codecs="avc1.42E01E"  (with codec params)
+     *   - Some send  application/octet-stream  for any binary file
+     *   - QuickTime (.mov) may arrive as video/quicktime or application/octet-stream
+     *
+     * Strategy:
+     *   1. Accept anything whose MIME type starts with "video/" (covers all
+     *      standard video/* subtypes and any ;params suffix).
+     *   2. Accept "application/octet-stream" when the file extension is a
+     *      recognised video extension (fallback for OS-level generic type).
+     *   3. Reject everything else.
+     */
+    private void validateVideo(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("No file provided");
+        }
+
+        String contentType = file.getContentType();
+        String filename    = file.getOriginalFilename() != null
+                            ? file.getOriginalFilename().toLowerCase() : "";
+
+        boolean validMime = contentType != null && contentType.startsWith("video/");
+
+        boolean genericMimeWithValidExt =
+                "application/octet-stream".equals(contentType) &&
+                ALLOWED_VIDEO_EXTENSIONS.stream().anyMatch(filename::endsWith);
+
+        if (!validMime && !genericMimeWithValidExt) {
+            throw new IllegalArgumentException(
+                    "Invalid file type. Allowed video formats: MP4, WebM, MOV, AVI, MKV");
+        }
+
+        long limitBytes = appProperties.getMedia().getVideoMaxSizeBytes();
+        if (file.getSize() > limitBytes) {
+            long limitMb = limitBytes / (1024 * 1024);
+            throw new IllegalArgumentException(
+                    "Video size exceeds the maximum allowed limit of " + limitMb + " MB");
         }
     }
 }
