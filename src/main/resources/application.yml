@@ -2,6 +2,18 @@ spring:
   application:
     name: blog
 
+# ── Server / Proxy ────────────────────────────────────────────────────────────
+# CRITICAL for OAuth2 behind Nginx (or any reverse proxy with SSL termination).
+# Without this, Spring Boot only sees the internal HTTP connection from Nginx
+# and generates `http://` redirect URIs.  Google (and GitHub) then reject them
+# because you registered `https://` URIs in their consoles.
+#
+# `framework` tells Spring to read X-Forwarded-Proto / X-Forwarded-Host headers
+# set by Nginx, so all generated URLs (including OAuth2 redirect_uri) use the
+# correct external scheme and host.
+server:
+  forward-headers-strategy: framework
+
   # ── Datasource ──────────────────────────────────────────────────────────────
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/blog}
