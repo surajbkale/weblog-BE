@@ -22,8 +22,8 @@ import java.util.Objects;
  * Media upload controller with per-user Redis rate limiting.
  *
  * <p>Each authenticated user is allowed at most {@value #UPLOAD_LIMIT} uploads
- * within a rolling {@value #WINDOW_MINUTES}-minute window.
- * The counter is stored in Redis with a TTL matching the window duration.
+ * within a rolling {@value #WINDOW_MINUTES}-minute window. The counter covers
+ * both image and video uploads combined.
  */
 @Slf4j
 @RestController
@@ -40,9 +40,7 @@ public class MediaController {
     /**
      * Uploads an image to Cloudinary and returns the secure URL.
      *
-     * <p>Requires authentication (not in the public permitAll list).
-     * Size limit is enforced by Spring multipart config (6 MB request max)
-     * and additionally by {@link MediaService} (5 MB per file).
+     * <p>Requires authentication. Size limit: 5 MB. Allowed types: JPEG, PNG, GIF, WebP, SVG.
      * Uploads are rate-limited to {@value #UPLOAD_LIMIT} per user per hour.
      */
     @PostMapping(value = "/upload", consumes = "multipart/form-data")
@@ -54,6 +52,24 @@ public class MediaController {
 
         String url = mediaService.upload(file);
         log.debug("User {} uploaded image: {}", currentUser.getId(), url);
+        return ResponseEntity.ok(ApiResponse.ok(Map.of("url", url)));
+    }
+
+    /**
+     * Uploads a video file to Cloudinary and returns the secure URL.
+     *
+     * <p>Requires authentication. Size limit: 50 MB. Allowed types: MP4, WebM, MOV, AVI.
+     * Uploads share the same rate limit as image uploads ({@value #UPLOAD_LIMIT} per hour).
+     */
+    @PostMapping(value = "/upload/video", consumes = "multipart/form-data")
+    public ResponseEntity<ApiResponse<Map<String, String>>> uploadVideo(
+            @RequestParam("file") MultipartFile file,
+            @AuthenticationPrincipal User currentUser) {
+
+        enforceUploadRateLimit(currentUser);
+
+        String url = mediaService.uploadVideo(file);
+        log.debug("User {} uploaded video: {}", currentUser.getId(), url);
         return ResponseEntity.ok(ApiResponse.ok(Map.of("url", url)));
     }
 

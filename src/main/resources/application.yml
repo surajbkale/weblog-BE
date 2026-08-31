@@ -89,11 +89,11 @@ spring:
             enable: true
             required: true
 
-  # ── Multipart (media uploads up to 5 MB) ────────────────────────────────────
+  # ── Multipart (images up to 5 MB, videos up to 50 MB) ─────────────────────
   servlet:
     multipart:
-      max-file-size: 5MB
-      max-request-size: 6MB
+      max-file-size: 250MB
+      max-request-size: 251MB
 
 # ── JWT ─────────────────────────────────────────────────────────────────────
 jwt:
@@ -132,6 +132,14 @@ app:
     trending-limit: 10                # max posts in trending response
     featured-limit: 10                # max posts in featured response
     feed-limit: 20                    # posts included in RSS feed
+
+  # ── Media upload size limits (single source of truth) ───────────────────────
+  # MediaService reads these values. The spring.servlet.multipart limits above
+  # are intentionally set slightly higher so Spring's HTTP layer never rejects a
+  # request before our application-level validation can return a proper error.
+  media:
+    image-max-size-bytes: 5242880     # 5 MB  (5 * 1024 * 1024)
+    video-max-size-bytes: 262144000    # 250 MB (250 * 1024 * 1024)
 
 
 # ── Actuator ────────────────────────────────────────────────────────────────

@@ -1,7 +1,9 @@
 package com.weblogs.blog.exception;
 
 import com.weblogs.blog.common.ApiResponse;
+import com.weblogs.blog.config.AppProperties;
 import jakarta.persistence.EntityNotFoundException;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -16,7 +18,10 @@ import java.util.List;
 
 @Slf4j
 @RestControllerAdvice
+@RequiredArgsConstructor
 public class GlobalExceptionHandler {
+
+    private final AppProperties appProperties;
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValidException ex) {
@@ -52,8 +57,12 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ResponseEntity<ApiResponse<Void>> handleMaxUploadSize(MaxUploadSizeExceededException ex) {
+        long imageLimitMb = appProperties.getMedia().getImageMaxSizeBytes() / (1024 * 1024);
+        long videoLimitMb = appProperties.getMedia().getVideoMaxSizeBytes() / (1024 * 1024);
+        String message = String.format(
+                "File too large. Max allowed: images %d MB, videos %d MB.", imageLimitMb, videoLimitMb);
         return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
-                .body(ApiResponse.error("File size exceeds the maximum allowed limit of 5 MB"));
+                .body(ApiResponse.error(message));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
