@@ -274,22 +274,29 @@ public class AuthService {
 
     private void setRefreshCookie(HttpServletResponse response, String rawToken) {
         boolean secureCookies = appProperties.getCookies().isSecure();
+
+        // SameSite=None is required when the frontend and backend are on different
+        // subdomains (e.g. weblog.lumenvault.live → weblogapi.lumenvault.live).
+        // SameSite=Lax only works for same-host origins (localhost dev).
+        // SameSite=None REQUIRES Secure=true — set COOKIES_SECURE=true in .env.prod.
+        String sameSite = secureCookies ? "None" : "Lax";
+
         ResponseCookie cookie = ResponseCookie.from(REFRESH_COOKIE_NAME, rawToken)
                 .httpOnly(true)
                 .secure(secureCookies)
-                .sameSite("Lax")
+                .sameSite(sameSite)
                 .path("/api/v1/auth")
                 .maxAge(REFRESH_TOKEN_TTL)
                 .build();
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
 
-        // Readable hint cookie so the frontend can skip the refresh call
-        // when the user has no session at all (avoids two wasted API calls on every
-        // public page for guests). Not HttpOnly — must be JS-readable.
+        // Readable hint cookie — retained for same-origin dev environments.
+        // In cross-subdomain production the frontend uses localStorage instead
+        // (document.cookie cannot read cookies set by a different subdomain).
         ResponseCookie hint = ResponseCookie.from("session_hint", "1")
                 .httpOnly(false)              // must be JS-readable
-                .secure(secureCookies)        // matches refresh cookie security level
-                .sameSite("Lax")
+                .secure(secureCookies)
+                .sameSite(sameSite)
                 .path("/")
                 .maxAge(REFRESH_TOKEN_TTL)
                 .build();
@@ -298,10 +305,12 @@ public class AuthService {
 
     private void clearRefreshCookie(HttpServletResponse response) {
         boolean secureCookies = appProperties.getCookies().isSecure();
+        String sameSite = secureCookies ? "None" : "Lax";
+
         ResponseCookie cookie = ResponseCookie.from(REFRESH_COOKIE_NAME, "")
                 .httpOnly(true)
                 .secure(secureCookies)
-                .sameSite("Lax")
+                .sameSite(sameSite)
                 .path("/api/v1/auth")
                 .maxAge(Duration.ZERO)
                 .build();
@@ -311,7 +320,7 @@ public class AuthService {
         ResponseCookie hint = ResponseCookie.from("session_hint", "")
                 .httpOnly(false)
                 .secure(secureCookies)
-                .sameSite("Lax")
+                .sameSite(sameSite)
                 .path("/")
                 .maxAge(Duration.ZERO)
                 .build();
