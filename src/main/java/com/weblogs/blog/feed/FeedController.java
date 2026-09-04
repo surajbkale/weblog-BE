@@ -70,7 +70,7 @@ public class FeedController {
           .append("    <lastBuildDate>").append(now).append("</lastBuildDate>\n");
 
         for (Post post : posts) {
-            String postUrl   = frontendUrl + "/posts/" + post.getSlug();
+            String postUrl   = frontendUrl + "/blog/" + post.getSlug();
             String pubDate   = post.getPublishedAt() != null
                     ? ZonedDateTime.ofInstant(post.getPublishedAt(), ZoneOffset.UTC).format(RFC_822)
                     : now;
@@ -120,7 +120,7 @@ public class FeedController {
                     PageRequest.of(pageNumber++, SITEMAP_PAGE_SIZE));
 
             for (Post post : chunk) {
-                String loc     = frontendUrl + "/posts/" + post.getSlug();
+                String loc     = frontendUrl + "/blog/" + post.getSlug();
                 String lastmod = post.getUpdatedAt() != null
                         ? ZonedDateTime.ofInstant(post.getUpdatedAt(), ZoneOffset.UTC).format(ISO_DATE)
                         : ZonedDateTime.ofInstant(post.getCreatedAt(), ZoneOffset.UTC).format(ISO_DATE);

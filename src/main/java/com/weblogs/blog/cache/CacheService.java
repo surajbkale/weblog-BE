@@ -98,14 +98,30 @@ public class CacheService {
     /**
      * Evicts ALL post list caches in one pipeline call.
      * Called whenever a post is created, updated, published, unpublished, or deleted.
+     *
+     * <p>Members of the tracker SET are always Strings (they were added as Strings
+     * via {@link #putListCache}). The {@code instanceof String s} guard defends
+     * against the unlikely-but-catastrophic case of Redis data corruption or a
+     * wrong deserializer producing a non-String value, which would otherwise throw
+     * an unchecked {@code ClassCastException} inside the forEach lambda and be
+     * silently swallowed by the outer catch block — leaving stale caches in place.
      */
     public void evictAllPostListCaches() {
         try {
             Set<Object> keys = jsonRedisTemplate.opsForSet().members(POST_LIST_KEYS_TRACKER);
             if (keys != null && !keys.isEmpty()) {
-                // Cast to String — all keys we added are Strings
-                keys.forEach(k -> jsonRedisTemplate.delete((String) k));
-                log.debug("Evicted {} post list cache entries", keys.size());
+                int evicted = 0;
+                for (Object k : keys) {
+                    if (k instanceof String s) {
+                        jsonRedisTemplate.delete(s);
+                        evicted++;
+                    } else {
+                        // Should never happen — log so we know if the serializer misbehaves
+                        log.warn("Unexpected non-String key in post list tracker (type={}): {}",
+                                k == null ? "null" : k.getClass().getSimpleName(), k);
+                    }
+                }
+                log.debug("Evicted {} post list cache entries", evicted);
             }
             jsonRedisTemplate.delete(POST_LIST_KEYS_TRACKER);
         } catch (Exception e) {

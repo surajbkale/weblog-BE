@@ -23,6 +23,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -135,11 +138,25 @@ public class AdminService {
     @Transactional(readOnly = true)
     public PaginatedResponse<AdminPostResponse> listAllPosts(PostStatus status, Pageable pageable) {
         Page<Post> page = postRepository.findAllForAdmin(status, pageable);
-        return PaginatedResponse.from(page.map(post -> {
-            long likeCount    = postRepository.countLikesByPostId(post.getId());
-            long commentCount = postRepository.countCommentsByPostId(post.getId());
-            return AdminPostResponse.from(post, likeCount, commentCount);
-        }));
+        List<Post> posts = page.getContent();
+
+        // Batch-fetch counts: 2 queries for the entire page instead of 2×pageSize.
+        // Mirrors the same pattern used in PostService.batchMapListItems.
+        List<UUID> postIds = posts.stream().map(Post::getId).toList();
+
+        Map<UUID, Long> likeCounts = new HashMap<>();
+        postRepository.findLikeCountsByPostIds(postIds)
+                .forEach(row -> likeCounts.put((UUID) row[0], (Long) row[1]));
+
+        Map<UUID, Long> commentCounts = new HashMap<>();
+        postRepository.findCommentCountsByPostIds(postIds)
+                .forEach(row -> commentCounts.put((UUID) row[0], (Long) row[1]));
+
+        return PaginatedResponse.from(page.map(post -> AdminPostResponse.from(
+                post,
+                likeCounts.getOrDefault(post.getId(), 0L),
+                commentCounts.getOrDefault(post.getId(), 0L)
+        )));
     }
 
     /**

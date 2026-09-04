@@ -295,9 +295,26 @@ public class PostService {
 
     // ── View Tracking ─────────────────────────────────────────────────────────
 
+    /**
+     * Increments the view counter for a post.
+     *
+     * <p>This endpoint is unauthenticated and public, so we apply two guards:
+     * <ol>
+     *   <li>{@code deleted = false} — enforced by {@link #requirePost}.</li>
+     *   <li>{@code status = PUBLISHED} — drafts must never accumulate views via
+     *       this path; an author previewing their own draft should not inflate
+     *       the count, and an attacker knowing the UUID of a draft must not
+     *       be able to touch it.</li>
+     * </ol>
+     * If either condition is not met the call is silently ignored (no error
+     * is returned so the client doesn't know whether the post exists).
+     */
     public void incrementView(UUID postId) {
-        // Validation: ensures post exists and is not deleted
-        requirePost(postId);
+        Post post = requirePost(postId);
+        if (post.getStatus() != PostStatus.PUBLISHED) {
+            // Draft or archived — silently no-op. No error: don't reveal existence.
+            return;
+        }
         viewCountService.increment(postId);
     }
 
@@ -454,8 +471,11 @@ public class PostService {
         boolean newTagCreated = false;
         for (String rawName : tagNames) {
             String name = rawName.strip();
-            boolean existed = tagRepository.findByName(name).isPresent();
-            Tag tag = tagRepository.findByName(name).orElseGet(() -> {
+            // Single DB hit: capture the Optional once and reuse it for both
+            // the existence check and the fallback create path.
+            Optional<Tag> existing = tagRepository.findByName(name);
+            boolean existed = existing.isPresent();
+            Tag tag = existing.orElseGet(() -> {
                 String slug = name.toLowerCase()
                         .replaceAll("[^a-z0-9\\s-]", "")
                         .replaceAll("[\\s]+", "-");
