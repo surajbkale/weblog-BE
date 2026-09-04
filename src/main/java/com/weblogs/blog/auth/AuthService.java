@@ -1,6 +1,7 @@
 package com.weblogs.blog.auth;
 
 import com.weblogs.blog.auth.dto.*;
+import com.weblogs.blog.cache.CacheService;
 import com.weblogs.blog.config.AppProperties;
 import com.weblogs.blog.exception.EmailNotVerifiedException;
 import com.weblogs.blog.exception.ForbiddenException;
@@ -41,6 +42,7 @@ public class AuthService {
     private final RateLimiter rateLimiter;
     private final MailService mailService;
     private final AppProperties appProperties;
+    private final CacheService cacheService;
     private final SecureRandom secureRandom = new SecureRandom();
 
     // ── Register ──────────────────────────────────────────────────────────────
@@ -63,6 +65,9 @@ public class AuthService {
                 .role(Role.USER)
                 .build();
         user = userRepository.save(user);
+
+        // Evict cached admin stats so totalUsers reflects the new registration immediately
+        cacheService.evict(CacheService.ADMIN_STATS);
 
         sendAuthToken(user, AuthTokenType.EMAIL_VERIFICATION, VERIFICATION_TOKEN_TTL);
         return generic;

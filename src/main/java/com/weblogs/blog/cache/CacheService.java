@@ -40,6 +40,7 @@ public class CacheService {
     public static final String CATEGORIES_ALL         = "categories:all";
     public static final String TRENDING_POSTS         = "post:trending";
     public static final String FEATURED_POSTS         = "post:featured";
+    public static final String ADMIN_STATS            = "admin:stats";
 
     // ── Generic get/put/evict ─────────────────────────────────────────────────
 

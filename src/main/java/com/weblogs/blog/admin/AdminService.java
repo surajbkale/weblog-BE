@@ -41,6 +41,8 @@ import java.util.UUID;
 public class AdminService {
 
     private static final Duration STATS_WINDOW = Duration.ofDays(7);
+    /** Stats are cached for 2 minutes — accurate enough for a dashboard, cheap enough to avoid 8 COUNT(*) per refresh. */
+    private static final Duration STATS_TTL    = Duration.ofSeconds(120);
 
     private final UserRepository    userRepository;
     private final PostRepository    postRepository;
@@ -180,6 +182,7 @@ public class AdminService {
         cacheService.evictAllPostListCaches();
         cacheService.evict(CacheService.TRENDING_POSTS);
         cacheService.evict(CacheService.FEATURED_POSTS);
+        evictAdminStats(); // totalPosts count changed
 
         log.info("Admin hard-deleted post id={} slug={}", postId, slug);
     }
@@ -207,6 +210,7 @@ public class AdminService {
         postRepository.save(post);
 
         cacheService.evictAllPostListCaches();
+        evictAdminStats(); // deleted post count changed
 
         log.info("Admin restored soft-deleted post id={}", postId);
         long likeCount    = postRepository.countLikesByPostId(postId);
@@ -233,6 +237,7 @@ public class AdminService {
         post.setFeatured(featured);
         postRepository.save(post);
         cacheService.evict(CacheService.FEATURED_POSTS);
+        evictAdminStats(); // featured flag change may affect display counts
 
         long likeCount    = postRepository.countLikesByPostId(postId);
         long commentCount = postRepository.countCommentsByPostId(postId);
@@ -246,34 +251,55 @@ public class AdminService {
     /**
      * Aggregates platform-wide counts for the admin dashboard.
      * Includes all-time totals and a rolling 7-day window for growth monitoring.
+     *
+     * <p>Results are cached in Redis for {@value} seconds ({@link #STATS_TTL}).
+     * The cache is evicted whenever a significant mutation occurs — post create/delete/restore
+     * or user registration — so the dashboard never serves data more than 2 minutes stale.
      */
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional(readOnly = true)
     public AdminStatsResponse getStats() {
-        Instant since7d = Instant.now().minus(STATS_WINDOW);
+        // Cache hit — return immediately without any DB aggregate queries
+        return cacheService.<AdminStatsResponse>get(CacheService.ADMIN_STATS)
+                .orElseGet(() -> {
+                    Instant since7d = Instant.now().minus(STATS_WINDOW);
 
-        long totalUsers     = userRepository.count();
-        long totalPosts     = postRepository.count();
-        long totalPublished = postRepository.countByStatusAndDeletedFalse(PostStatus.PUBLISHED);
-        long totalComments  = commentRepository.countByDeletedFalse();
-        long totalLikes     = likeRepository.count();
-        long totalViews     = postRepository.sumAllViewCounts();
+                    long totalUsers     = userRepository.count();
+                    long totalPosts     = postRepository.count();
+                    long totalPublished = postRepository.countByStatusAndDeletedFalse(PostStatus.PUBLISHED);
+                    long totalComments  = commentRepository.countByDeletedFalse();
+                    long totalLikes     = likeRepository.count();
+                    long totalViews     = postRepository.sumAllViewCounts();
 
-        long newUsers7d    = userRepository.countByCreatedAtAfter(since7d);
-        long newPosts7d    = postRepository.countByCreatedAtAfterAndDeletedFalse(since7d);
-        long newComments7d = commentRepository.countByCreatedAtAfterAndDeletedFalse(since7d);
+                    long newUsers7d    = userRepository.countByCreatedAtAfter(since7d);
+                    long newPosts7d    = postRepository.countByCreatedAtAfterAndDeletedFalse(since7d);
+                    long newComments7d = commentRepository.countByCreatedAtAfterAndDeletedFalse(since7d);
 
-        return new AdminStatsResponse(
-                totalUsers,
-                totalPosts,
-                totalPublished,
-                totalComments,
-                totalLikes,
-                totalViews,
-                newUsers7d,
-                newPosts7d,
-                newComments7d,
-                Instant.now()
-        );
+                    AdminStatsResponse stats = new AdminStatsResponse(
+                            totalUsers,
+                            totalPosts,
+                            totalPublished,
+                            totalComments,
+                            totalLikes,
+                            totalViews,
+                            newUsers7d,
+                            newPosts7d,
+                            newComments7d,
+                            Instant.now()
+                    );
+                    cacheService.put(CacheService.ADMIN_STATS, stats, STATS_TTL);
+                    return stats;
+                });
+    }
+
+    // ── Cache helpers ─────────────────────────────────────────────────────────
+
+    /**
+     * Evicts the admin stats cache. Called after any mutation that meaningfully
+     * changes aggregate counts (post hard-delete, restore, feature toggle).
+     * User-registration eviction is handled in {@code AuthService}.
+     */
+    void evictAdminStats() {
+        cacheService.evict(CacheService.ADMIN_STATS);
     }
 }

@@ -101,8 +101,14 @@ public class PostService {
         authorizationHelper.requireOwnerOrAdmin(post.getAuthor().getId(), currentUser);
 
         if (request.title() != null && !request.title().isBlank()) {
-            // Re-slug only if title actually changed
-            if (!request.title().equals(post.getTitle())) {
+            // Slug freeze policy (same as Medium / Ghost / Hashnode):
+            //   DRAFT     → re-slug freely on title change. No external links exist yet.
+            //   PUBLISHED → slug is permanently frozen. External sites, bookmarks,
+            //               search-engine indexes and RSS readers all hold a link to
+            //               the current slug. Changing it causes link rot and SEO damage.
+            //               Title edits update only the displayed title, not the URL.
+            boolean isDraft = post.getStatus() == PostStatus.DRAFT;
+            if (isDraft && !request.title().equals(post.getTitle())) {
                 post.setSlug(generateUniqueSlug(request.title()));
             }
             post.setTitle(request.title());
@@ -113,8 +119,8 @@ public class PostService {
         if (request.categoryIds()   != null) post.setCategories(resolveCategories(request.categoryIds()));
         if (request.tagNames()      != null) post.setTags(resolveOrCreateTags(request.tagNames()));
 
-        // Retry on slug collision (same TOCTOU race as createPost, though far rarer
-        // here since title changes are user-initiated rather than concurrent bursts).
+        // Retry on slug collision (TOCTOU race — only reachable for drafts since
+        // published posts have a frozen slug that is already unique in the DB).
         int attempt = 0;
         while (true) {
             try {
@@ -126,9 +132,14 @@ public class PostService {
                             postId, attempt);
                     throw ex;
                 }
-                post.setSlug(generateUniqueSlug(request.title()));
-                log.debug("Slug collision on update attempt {}, retrying with slug='{}'",
-                        attempt, post.getSlug());
+                // Only drafts ever reach here (published slugs are frozen and unique).
+                if (request.title() != null) {
+                    post.setSlug(generateUniqueSlug(request.title()));
+                    log.debug("Slug collision on update attempt {}, retrying with slug='{}'",
+                            attempt, post.getSlug());
+                } else {
+                    throw ex; // collision on a non-title field — unexpected, surface immediately
+                }
             }
         }
 
@@ -268,9 +279,21 @@ public class PostService {
      * Returns the post if it is published. If it is a draft, only the author may view it;
      * anyone else gets a 404 (no 403 — don't leak draft existence).
      *
-     * <p>Caching: published posts are cached by slug (TTL 10 min) with
-     * {@code likedByCurrentUser = false}. On cache hit, the liked flag is patched via
-     * a single DB lookup if the caller is authenticated.
+     * <h3>Caching contract — {@code likedByCurrentUser} invariant</h3>
+     * <p>The cached {@link PostResponse} <em>always</em> stores {@code likedByCurrentUser = false},
+     * regardless of who triggered the cache population. This is intentional:
+     * <ul>
+     *   <li>The {@code liked} flag is <strong>user-specific state</strong>. Caching a
+     *       {@code true} value would incorrectly serve it to every subsequent caller,
+     *       including unauthenticated users and users who have not liked the post.</li>
+     *   <li>After every cache retrieval (hit <em>or</em> miss), the liked flag is
+     *       <strong>always patched</strong> via a single {@code EXISTS} DB lookup keyed
+     *       on {@code (postId, userId)} before returning the response to the caller.</li>
+     *   <li>Unauthenticated callers bypass the patch entirely and receive
+     *       {@code likedByCurrentUser = false} directly from the cache.</li>
+     * </ul>
+     * <p>This design keeps the cache shareable across all users while still serving
+     * per-user accuracy at the cost of exactly one extra query per authenticated request.
      */
     @Transactional(readOnly = true)
     public PostResponse getBySlug(String slug, User currentUser) {
@@ -281,13 +304,15 @@ public class PostService {
         if (cached.isPresent()) {
             log.debug("Cache HIT: {}", cacheKey);
             PostResponse hit = cached.get();
-            // Views are now tracked client-side via PATCH /api/v1/posts/{id}/view
-            
-            // Patch the user-specific liked flag
+
+            // The cached entry always has likedByCurrentUser=false (see class javadoc).
+            // Patch the per-user liked flag here before returning.
+            // For unauthenticated callers this is always false — no DB hit.
             boolean liked = currentUser != null
                     && likeRepository.existsByPostIdAndUserId(hit.id(), currentUser.getId());
             if (liked != hit.likedByCurrentUser()) {
-                // Return a new record instance with corrected liked state
+                // liked is true but the cached entry has false — reconstruct with correct flag.
+                // We never reach here for unauthenticated callers (liked is always false).
                 return new PostResponse(hit.id(), hit.title(), hit.slug(), hit.content(),
                         hit.excerpt(), hit.coverImageUrl(), hit.status(), hit.author(),
                         hit.categories(), hit.tags(), hit.likeCount(), hit.commentCount(),
@@ -312,13 +337,17 @@ public class PostService {
             return toFullResponse(post, currentUser);
         }
 
-        // Published — cache with liked=false
-        // Views are tracked client-side.
-        PostResponse base = toFullResponse(post, null); // liked=false for cache
+        // Published — build the base response with liked=false and store it in cache.
+        // IMPORTANT: we deliberately pass null as currentUser so toFullResponse produces
+        // liked=false. This is the cache invariant: the cached entry is always
+        // user-agnostic. Per-user liked state is resolved AFTER cache retrieval, never before.
+        // See the method javadoc for a full explanation.
+        PostResponse base = toFullResponse(post, null);
         cacheService.put(cacheKey, base,
                 Duration.ofSeconds(appProperties.getCache().getPostBySlugTtlSeconds()));
 
-        // Patch liked for the current caller if authenticated
+        // Patch liked flag for the current caller if authenticated.
+        // The cached entry (base) remains liked=false — only the returned value is patched.
         if (currentUser != null) {
             boolean liked = likeRepository.existsByPostIdAndUserId(post.getId(), currentUser.getId());
             if (liked) {
