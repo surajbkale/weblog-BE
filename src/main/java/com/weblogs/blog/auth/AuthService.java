@@ -3,6 +3,7 @@ package com.weblogs.blog.auth;
 import com.weblogs.blog.auth.dto.*;
 import com.weblogs.blog.config.AppProperties;
 import com.weblogs.blog.exception.EmailNotVerifiedException;
+import com.weblogs.blog.exception.ForbiddenException;
 import com.weblogs.blog.exception.InvalidTokenException;
 import com.weblogs.blog.exception.RateLimitExceededException;
 import com.weblogs.blog.security.JwtService;
@@ -86,6 +87,12 @@ public class AuthService {
 
     @Transactional
     public void resendVerification(String email) {
+        // Rate-limit by email to prevent mail-bombing and enumeration via timing.
+        // Uses the same Redis-backed limiter as the login endpoint.
+        if (!rateLimiter.isAllowed(email)) {
+            throw new RateLimitExceededException("Too many requests. Please try again later.");
+        }
+
         // Always returns generic success — no enumeration
         Optional<User> userOpt = userRepository.findByEmail(email);
         if (userOpt.isPresent() && !userOpt.get().isEmailVerified()) {
@@ -108,6 +115,15 @@ public class AuthService {
                 .filter(u -> u.getAuthProvider() == AuthProvider.LOCAL)
                 .filter(u -> passwordEncoder.matches(request.password(), u.getPasswordHash()))
                 .orElseThrow(() -> new InvalidTokenException("Invalid email or password"));
+
+        // Reject suspended accounts before issuing any token.
+        // The JwtAuthFilter blocks suspended users on subsequent requests via the
+        // `active` claim, but without this check a suspended user could obtain a
+        // fresh access token by simply hitting the login endpoint again.
+        if (!user.isActive()) {
+            throw new ForbiddenException(
+                    "Your account has been suspended. Please contact support.");
+        }
 
         if (!user.isEmailVerified()) {
             throw new EmailNotVerifiedException(
@@ -198,6 +214,13 @@ public class AuthService {
 
     @Transactional
     public void forgotPassword(String email) {
+        // Rate-limit by email to prevent mail-bombing and enumeration via timing.
+        // Same limiter as login — a separate rate-limit config block (app.rate-limit.reset)
+        // can be added later if different thresholds are required.
+        if (!rateLimiter.isAllowed(email)) {
+            throw new RateLimitExceededException("Too many requests. Please try again later.");
+        }
+
         // Always generic response — no enumeration
         userRepository.findByEmail(email)
                 .filter(u -> u.getAuthProvider() == AuthProvider.LOCAL)

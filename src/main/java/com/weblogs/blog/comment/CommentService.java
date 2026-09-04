@@ -7,6 +7,7 @@ import com.weblogs.blog.common.PaginatedResponse;
 import com.weblogs.blog.exception.ForbiddenException;
 import com.weblogs.blog.post.Post;
 import com.weblogs.blog.post.PostRepository;
+import com.weblogs.blog.post.PostStatus;
 import com.weblogs.blog.user.Role;
 import com.weblogs.blog.user.User;
 import jakarta.persistence.EntityNotFoundException;
@@ -32,7 +33,8 @@ public class CommentService {
     public CommentResponse addComment(UUID postId, CommentRequest request, User author) {
         Post post = postRepository.findById(postId)
                 .filter(p -> !p.isDeleted())
-                .orElseThrow(() -> new EntityNotFoundException("Post not found"));
+                .filter(p -> p.getStatus() == PostStatus.PUBLISHED)
+                .orElseThrow(() -> new EntityNotFoundException("Post not found or not published"));
 
         Comment comment = Comment.builder()
                 .post(post)

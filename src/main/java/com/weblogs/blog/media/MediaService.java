@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
 
@@ -29,11 +30,28 @@ public class MediaService {
             ".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v"
     );
 
+    /**
+     * Cloudinary chunked-upload chunk size for videos: 20 MB.
+     *
+     * <p>Cloudinary's {@code uploadLarge} splits the stream into chunks of this size
+     * and uploads them sequentially. Only one chunk at a time is held in memory, so
+     * a 50 MB video requires at most ~20 MB of heap regardless of file size.
+     * The minimum chunk size allowed by Cloudinary is 5 MB; 20 MB is a safe default
+     * that keeps the number of HTTP round-trips low for typical blog videos.
+     */
+    private static final int VIDEO_CHUNK_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB
+
     private final Cloudinary     cloudinary;
     private final AppProperties  appProperties;  // single source of truth for size limits
 
+    // ── Image upload ──────────────────────────────────────────────────────────
+
     /**
      * Validates and uploads an image file to Cloudinary.
+     *
+     * <p>The file is streamed via {@link MultipartFile#getInputStream()} so that
+     * no full in-memory {@code byte[]} copy is needed — the data flows directly
+     * from the multipart request buffer to the Cloudinary HTTP client.
      *
      * @param file the multipart file from the request
      * @return the secure Cloudinary URL of the uploaded image
@@ -43,10 +61,10 @@ public class MediaService {
     public String upload(MultipartFile file) {
         validateImage(file);
 
-        try {
+        try (InputStream in = file.getInputStream()) {
             @SuppressWarnings("unchecked")
             Map<String, Object> result = cloudinary.uploader().upload(
-                    file.getBytes(),
+                    in,
                     ObjectUtils.asMap(
                             "folder",          "blog",
                             "resource_type",   "image",
@@ -63,8 +81,15 @@ public class MediaService {
         }
     }
 
+    // ── Video upload ──────────────────────────────────────────────────────────
+
     /**
-     * Validates and uploads a video file to Cloudinary.
+     * Validates and uploads a video file to Cloudinary using chunked upload.
+     *
+     * <p>Uses {@code uploadLarge} with {@link #VIDEO_CHUNK_SIZE_BYTES}-sized chunks
+     * so that at most one chunk (20 MB) is ever resident in heap at a time,
+     * regardless of the total video size. This avoids the {@code byte[]} heap
+     * allocation that {@code file.getBytes()} would require for a 50 MB upload.
      *
      * @param file the multipart video file from the request
      * @return the secure Cloudinary URL of the uploaded video
@@ -74,16 +99,17 @@ public class MediaService {
     public String uploadVideo(MultipartFile file) {
         validateVideo(file);
 
-        try {
+        try (InputStream in = file.getInputStream()) {
             @SuppressWarnings("unchecked")
-            Map<String, Object> result = cloudinary.uploader().upload(
-                    file.getBytes(),
+            Map<String, Object> result = cloudinary.uploader().uploadLarge(
+                    in,
                     ObjectUtils.asMap(
                             "folder",          "blog/videos",
                             "resource_type",   "video",
                             "use_filename",    true,
                             "unique_filename", true
-                    )
+                    ),
+                    VIDEO_CHUNK_SIZE_BYTES
             );
             String url = (String) result.get("secure_url");
             log.debug("Cloudinary video upload succeeded: {}", url);

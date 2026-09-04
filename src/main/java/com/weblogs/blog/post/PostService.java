@@ -15,6 +15,7 @@ import com.weblogs.blog.user.User;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -45,30 +46,51 @@ public class PostService {
 
     @Transactional
     public PostResponse createPost(CreatePostRequest request, User author) {
-        String slug = generateUniqueSlug(request.title());
-
         Set<Category> categories = resolveCategories(request.categoryIds());
         Set<Tag>      tags       = resolveOrCreateTags(request.tagNames());
 
-        Post post = Post.builder()
-                .title(request.title())
-                .slug(slug)
-                .content(request.content())
-                .excerpt(request.excerpt())
-                .coverImageUrl(request.coverImageUrl())
-                .status(PostStatus.DRAFT)
-                .author(author)
-                .categories(categories)
-                .tags(tags)
-                .build();
+        // generateUniqueSlug is a best-effort pre-check that avoids a constraint
+        // violation in the 99.9% non-concurrent case. The retry loop below is the
+        // actual safety net for the TOCTOU race: two simultaneous requests with the
+        // same title both pass the pre-check, but only one INSERT wins — the other
+        // gets a DataIntegrityViolationException and retries with a new suffix.
+        String slug = generateUniqueSlug(request.title());
 
-        post = postRepository.save(post);
+        // Retry up to 10 times on a slug collision (UniqueConstraintViolation).
+        // Each retry appends / increments a numeric suffix so we converge quickly.
+        int attempt = 0;
+        while (true) {
+            try {
+                Post post = Post.builder()
+                        .title(request.title())
+                        .slug(slug)
+                        .content(request.content())
+                        .excerpt(request.excerpt())
+                        .coverImageUrl(request.coverImageUrl())
+                        .status(PostStatus.DRAFT)
+                        .author(author)
+                        .categories(categories)
+                        .tags(tags)
+                        .build();
 
-        // A new draft doesn't appear in the public list, but evict anyway so
-        // subsequent publishes get a clean slate.
-        cacheService.evictAllPostListCaches();
+                post = postRepository.save(post);
+                // A new draft doesn't appear in the public list, but evict anyway so
+                // subsequent publishes get a clean slate.
+                cacheService.evictAllPostListCaches();
+                return toFullResponse(post, author);
 
-        return toFullResponse(post, author);
+            } catch (DataIntegrityViolationException ex) {
+                if (++attempt >= 10) {
+                    log.error("Failed to generate a unique slug for title='{}' after {} attempts",
+                            request.title(), attempt);
+                    throw ex; // Give up — something very unusual is happening
+                }
+                // Race condition: another request claimed this slug between our check
+                // and our INSERT. Generate a new suffixed candidate and retry.
+                slug = generateUniqueSlug(request.title());
+                log.debug("Slug collision on attempt {}, retrying with slug='{}'", attempt, slug);
+            }
+        }
     }
 
     // ── Update ────────────────────────────────────────────────────────────────
@@ -79,7 +101,7 @@ public class PostService {
         authorizationHelper.requireOwnerOrAdmin(post.getAuthor().getId(), currentUser);
 
         if (request.title() != null && !request.title().isBlank()) {
-            // Re-slug only if title changed
+            // Re-slug only if title actually changed
             if (!request.title().equals(post.getTitle())) {
                 post.setSlug(generateUniqueSlug(request.title()));
             }
@@ -91,9 +113,26 @@ public class PostService {
         if (request.categoryIds()   != null) post.setCategories(resolveCategories(request.categoryIds()));
         if (request.tagNames()      != null) post.setTags(resolveOrCreateTags(request.tagNames()));
 
-        post = postRepository.save(post);
-        evictPostCaches(post.getSlug());
+        // Retry on slug collision (same TOCTOU race as createPost, though far rarer
+        // here since title changes are user-initiated rather than concurrent bursts).
+        int attempt = 0;
+        while (true) {
+            try {
+                post = postRepository.save(post);
+                break;
+            } catch (DataIntegrityViolationException ex) {
+                if (++attempt >= 10) {
+                    log.error("Failed to save post id={} with unique slug after {} attempts",
+                            postId, attempt);
+                    throw ex;
+                }
+                post.setSlug(generateUniqueSlug(request.title()));
+                log.debug("Slug collision on update attempt {}, retrying with slug='{}'",
+                        attempt, post.getSlug());
+            }
+        }
 
+        evictPostCaches(post.getSlug());
         return toFullResponse(post, currentUser);
     }
 
@@ -424,7 +463,14 @@ public class PostService {
 
     /**
      * Generates a URL-safe slug from the title.
-     * On collision appends {@code -2}, {@code -3}, ... until unique.
+     *
+     * <p>This is a <em>best-effort heuristic</em> — it eliminates collisions in
+     * the common case (non-concurrent saves) by probing the DB and incrementing a
+     * numeric suffix. It is NOT a guarantee of uniqueness under concurrent load;
+     * callers ({@link #createPost}, {@link #updatePost}) must wrap {@code save()}
+     * in a retry loop that catches {@link DataIntegrityViolationException}.
+     *
+     * <p>On collision appends {@code -2}, {@code -3}, ... until the probe succeeds.
      */
     String generateUniqueSlug(String title) {
         String base = title.strip()
@@ -437,7 +483,7 @@ public class PostService {
         if (!postRepository.existsBySlug(base)) {
             return base;
         }
-        // Strip any existing numeric suffix before appending
+        // Strip any existing numeric suffix before appending a new one
         Pattern suffixPattern = Pattern.compile("^(.+)-\\d+$");
         var matcher = suffixPattern.matcher(base);
         String root = matcher.matches() ? matcher.group(1) : base;
