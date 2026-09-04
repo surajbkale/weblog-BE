@@ -634,7 +634,9 @@ public class PostService {
     }
 
     private PostResponse toFullResponse(Post post, User currentUser) {
-        long likeCount    = postRepository.countLikesByPostId(post.getId());
+        // like_count is a materialized column maintained by the V10 DB trigger.
+        // Reading it from the entity avoids an extra COUNT(*) query per post view.
+        long likeCount    = post.getLikeCount();
         long commentCount = postRepository.countCommentsByPostId(post.getId());
         boolean liked     = currentUser != null
                 && likeRepository.existsByPostIdAndUserId(post.getId(), currentUser.getId());
@@ -642,8 +644,10 @@ public class PostService {
     }
 
     /**
-     * H-1 fix: Batch-maps a list of posts to DTOs using 3 queries total regardless
-     * of list size — one for like counts, one for comment counts, one for liked IDs.
+     * H-1 fix: Batch-maps a list of posts to DTOs using 2 queries total regardless
+     * of list size — one for comment counts, one for liked post IDs.
+     * Like counts are read from the materialized {@code like_count} column on each
+     * {@link Post} entity (maintained by the V10 DB trigger) — no extra query needed.
      * This replaces the old {@code toListItemResponse} which fired 3 queries per post.
      */
     private List<PostListItemResponse> batchMapListItems(List<Post> posts, User currentUser) {
@@ -651,24 +655,22 @@ public class PostService {
 
         List<UUID> postIds = posts.stream().map(Post::getId).toList();
 
-        // Query 1: like counts for all posts
-        Map<UUID, Long> likeCounts = new HashMap<>();
-        postRepository.findLikeCountsByPostIds(postIds)
-                .forEach(row -> likeCounts.put((UUID) row[0], (Long) row[1]));
+        // Like counts come directly from the materialized posts.like_count column (V10).
+        // The DB trigger keeps it consistent on every like insert/delete — no extra query needed.
 
-        // Query 2: comment counts for all posts
+        // Query 1: comment counts for all posts in a single GROUP BY query
         Map<UUID, Long> commentCounts = new HashMap<>();
         postRepository.findCommentCountsByPostIds(postIds)
                 .forEach(row -> commentCounts.put((UUID) row[0], (Long) row[1]));
 
-        // Query 3: which posts the current user has liked (empty set for anonymous)
+        // Query 2: which posts the current user has liked (empty set for anonymous)
         Set<UUID> likedPostIds = currentUser == null
                 ? Set.of()
                 : new HashSet<>(postRepository.findLikedPostIds(currentUser.getId(), postIds));
 
         return posts.stream().map(post -> PostListItemResponse.from(
                 post,
-                likeCounts.getOrDefault(post.getId(), 0L),
+                post.getLikeCount(),   // materialized column — no extra query
                 commentCounts.getOrDefault(post.getId(), 0L),
                 likedPostIds.contains(post.getId())
         )).toList();

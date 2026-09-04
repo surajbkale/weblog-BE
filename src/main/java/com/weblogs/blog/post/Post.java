@@ -33,6 +33,8 @@ import java.util.UUID;
         @Index(name = "idx_posts_published_at",  columnList = "published_at DESC"),
         // V9 compound index — covers the dominant WHERE status=? AND deleted=? pattern
         @Index(name = "idx_posts_status_deleted", columnList = "status, deleted"),
+        // V10 index — covers ORDER BY like_count DESC for the 'mostLiked' sort
+        @Index(name = "idx_posts_like_count",    columnList = "like_count DESC"),
 })
 @EntityListeners(AuditingEntityListener.class)
 @Getter
@@ -94,6 +96,18 @@ public class Post {
     @Column(name = "view_count", nullable = false)
     @Builder.Default
     private long viewCount = 0L;
+
+    /**
+     * Materialized like count — maintained exclusively by the {@code trg_likes_update_like_count}
+     * DB trigger (V10 migration). Never written by JPA ({@code insertable=false, updatable=false}).
+     *
+     * <p>Used for {@code ORDER BY like_count DESC} in {@code findPublished} to avoid the
+     * correlated subquery that previously re-counted the likes table for every result row.
+     * An index on {@code like_count DESC} (V10) makes the sort an O(log N) index scan.
+     */
+    @Column(name = "like_count", nullable = false, insertable = false, updatable = false)
+    @Builder.Default
+    private long likeCount = 0L;
 
     @Column(nullable = false)
     @Builder.Default
