@@ -188,6 +188,72 @@ public class PostService {
         evictPostCaches(post.getSlug());
     }
 
+    // ── Author post list (dedicated, always cacheable) ───────────────────────
+
+    /**
+     * Returns a paginated list of published posts by a specific author.
+     *
+     * <p>Unlike {@link #getPublicList}, this method is <b>always cached</b> regardless
+     * of authentication state, because author-profile pages do not display per-user
+     * {@code likedByCurrentUser} state. The cached response is user-agnostic and safe
+     * to serve to any caller.
+     *
+     * <p>Cache key: {@code user:posts:{authorId}:{sort}:{page}:{size}} — TTL matches
+     * the global post-list TTL. The cache is automatically evicted whenever the author
+     * publishes, updates, or deletes a post via {@link #evictPostCaches}.
+     *
+     * @param authorId the author's UUID
+     * @param sort     sort order — "newest" (default), "oldest", "popular"
+     * @param pageable pagination parameters
+     */
+    @Transactional(readOnly = true)
+    public PaginatedResponse<PostListItemResponse> getAuthorPosts(
+            UUID authorId, String sort, Pageable pageable) {
+
+        String normalizedSort = switch (sort == null ? "newest" : sort.toLowerCase()) {
+            case "popular", "mostliked" -> "mostLiked";
+            case "oldest"               -> "oldest";
+            default                     -> "newest";
+        };
+
+        String cacheKey = CacheService.AUTHOR_POSTS_PREFIX
+                + authorId + ":"
+                + normalizedSort + ":"
+                + pageable.getPageNumber() + ":"
+                + pageable.getPageSize();
+
+        Optional<PaginatedResponse<PostListItemResponse>> cached = cacheService.get(cacheKey);
+        if (cached.isPresent()) {
+            log.debug("Cache HIT: {}", cacheKey);
+            return cached.get();
+        }
+        log.debug("Cache MISS: {}", cacheKey);
+
+        Page<Post> page = postRepository.findPublished(
+                null,                  // categorySlug — not filtered
+                null,                  // tagSlug      — not filtered
+                authorId.toString(),
+                null,                  // q            — no search
+                normalizedSort,
+                pageable
+        );
+
+        // No likedByCurrentUser needed for author profile pages — pass null for perf
+        List<PostListItemResponse> items = batchMapListItems(page.getContent(), null);
+        PaginatedResponse<PostListItemResponse> result = new PaginatedResponse<>(
+                items,
+                page.getNumber(),
+                page.getSize(),
+                page.getTotalElements(),
+                page.getTotalPages(),
+                page.isLast()
+        );
+
+        cacheService.putListCache(cacheKey, result,
+                Duration.ofSeconds(appProperties.getCache().getPostListTtlSeconds()));
+        return result;
+    }
+
     // ── Public list ───────────────────────────────────────────────────────────
 
     /**

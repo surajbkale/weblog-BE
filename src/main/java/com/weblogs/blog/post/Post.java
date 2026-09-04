@@ -15,7 +15,25 @@ import java.util.Set;
 import java.util.UUID;
 
 @Entity
-@Table(name = "posts")
+/*
+ * Index documentation — all indexes below are created by Flyway migrations.
+ * This @Table(indexes) block is for developer reference only; Hibernate DDL
+ * is disabled (spring.jpa.hibernate.ddl-auto=none) so these annotations do
+ * NOT modify the schema. Indexes that cannot be expressed in JPA @Index
+ * (GIN, partial) are noted in comments below.
+ *
+ *   idx_posts_search_vector  — GIN index on search_vector (V2) — Flyway only
+ *   idx_posts_featured       — partial index WHERE featured = TRUE (V5) — Flyway only
+ */
+@Table(name = "posts", indexes = {
+        // V2 single-column indexes
+        @Index(name = "idx_posts_author_id",    columnList = "author_id"),
+        @Index(name = "idx_posts_status",        columnList = "status"),
+        @Index(name = "idx_posts_deleted",       columnList = "deleted"),
+        @Index(name = "idx_posts_published_at",  columnList = "published_at DESC"),
+        // V9 compound index — covers the dominant WHERE status=? AND deleted=? pattern
+        @Index(name = "idx_posts_status_deleted", columnList = "status, deleted"),
+})
 @EntityListeners(AuditingEntityListener.class)
 @Getter
 @Setter

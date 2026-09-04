@@ -6,6 +6,8 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
@@ -41,6 +43,7 @@ public class CacheService {
     public static final String TRENDING_POSTS         = "post:trending";
     public static final String FEATURED_POSTS         = "post:featured";
     public static final String ADMIN_STATS            = "admin:stats";
+    public static final String AUTHOR_POSTS_PREFIX    = "user:posts:";
 
     // ── Generic get/put/evict ─────────────────────────────────────────────────
 
@@ -97,32 +100,41 @@ public class CacheService {
     }
 
     /**
-     * Evicts ALL post list caches in one pipeline call.
+     * Evicts ALL post list caches in a single pipelined Redis command.
      * Called whenever a post is created, updated, published, unpublished, or deleted.
+     *
+     * <p>Implementation: keys are collected from the tracker SET, filtered to Strings,
+     * then deleted with a single {@code DEL key1 key2 ... keyN} command via
+     * {@link RedisTemplate#delete(java.util.Collection)}. Spring Data Redis pipelines
+     * this as one network round-trip regardless of how many keys are deleted,
+     * replacing the previous O(N) sequential round-trips.
      *
      * <p>Members of the tracker SET are always Strings (they were added as Strings
      * via {@link #putListCache}). The {@code instanceof String s} guard defends
      * against the unlikely-but-catastrophic case of Redis data corruption or a
      * wrong deserializer producing a non-String value, which would otherwise throw
-     * an unchecked {@code ClassCastException} inside the forEach lambda and be
-     * silently swallowed by the outer catch block — leaving stale caches in place.
+     * an unchecked {@code ClassCastException} and be silently swallowed by the outer
+     * catch block — leaving stale caches in place.
      */
     public void evictAllPostListCaches() {
         try {
             Set<Object> keys = jsonRedisTemplate.opsForSet().members(POST_LIST_KEYS_TRACKER);
             if (keys != null && !keys.isEmpty()) {
-                int evicted = 0;
+                List<String> toDelete = new ArrayList<>(keys.size());
                 for (Object k : keys) {
                     if (k instanceof String s) {
-                        jsonRedisTemplate.delete(s);
-                        evicted++;
+                        toDelete.add(s);
                     } else {
                         // Should never happen — log so we know if the serializer misbehaves
                         log.warn("Unexpected non-String key in post list tracker (type={}): {}",
                                 k == null ? "null" : k.getClass().getSimpleName(), k);
                     }
                 }
-                log.debug("Evicted {} post list cache entries", evicted);
+                if (!toDelete.isEmpty()) {
+                    // Single DEL key1 key2 ... keyN — one round-trip regardless of list size
+                    jsonRedisTemplate.delete(toDelete);
+                    log.debug("Evicted {} post list cache entries in one pipeline call", toDelete.size());
+                }
             }
             jsonRedisTemplate.delete(POST_LIST_KEYS_TRACKER);
         } catch (Exception e) {

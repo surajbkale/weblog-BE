@@ -54,6 +54,32 @@ public class UserService {
         return UserProfileResponse.from(saved, postCount);
     }
 
+    // ── PATCH /me/avatar ──────────────────────────────────────────────────────
+
+    /**
+     * Atomically sets the user's avatar URL.
+     *
+     * <p>Called by {@code PATCH /api/v1/media/avatar} after a successful Cloudinary
+     * upload, within the same request. This eliminates the window between "image
+     * uploaded" and "profile updated" that exists when the two operations are separate.
+     *
+     * @param principal the authenticated user (JWT stub)
+     * @param avatarUrl the Cloudinary secure URL returned by the upload call;
+     *                  pass {@code null} or blank to clear the current avatar
+     * @return the updated profile
+     */
+    @Transactional
+    public UserProfileResponse updateAvatar(User principal, String avatarUrl) {
+        User user = userRepository.findById(principal.getId())
+                .orElseThrow(() -> new NotFoundException("User not found"));
+
+        user.setAvatarUrl((avatarUrl == null || avatarUrl.isBlank()) ? null : avatarUrl.trim());
+
+        User saved = userRepository.save(user);
+        long postCount = userRepository.countPublishedPostsByUserId(saved.getId());
+        return UserProfileResponse.from(saved, postCount);
+    }
+
     // ── PUT /me/password ─────────────────────────────────────────────────────
 
     @Transactional

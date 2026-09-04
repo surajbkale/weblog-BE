@@ -1,9 +1,11 @@
 package com.weblogs.blog.media;
 
 import com.weblogs.blog.common.ApiResponse;
+import com.weblogs.blog.auth.dto.UserProfileResponse;
 import com.weblogs.blog.exception.RateLimitExceededException;
 import com.weblogs.blog.user.Role;
 import com.weblogs.blog.user.User;
+import com.weblogs.blog.user.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -39,6 +41,7 @@ public class MediaController {
     private static final int WINDOW_MINUTES = 60;   // rolling window in minutes
 
     private final MediaService        mediaService;
+    private final UserService         userService;
     private final StringRedisTemplate redisTemplate;
 
     // ── Image upload ──────────────────────────────────────────────────────────
@@ -60,6 +63,39 @@ public class MediaController {
         String url = mediaService.upload(file, currentUser.getId());
         log.debug("User {} uploaded image: {}", currentUser.getId(), url);
         return ResponseEntity.ok(ApiResponse.ok(Map.of("url", url)));
+    }
+
+    // ── Avatar upload (atomic) ────────────────────────────────────────────────
+
+    /**
+     * PATCH /api/v1/media/avatar — uploads an image to Cloudinary and immediately
+     * saves the resulting URL as the authenticated user's avatar, atomically.
+     *
+     * <p>This eliminates the orphaned-upload window that exists when the upload
+     * and profile-update are two separate API calls: if the second call fails the
+     * image is uploaded but never linked to the user. Here both steps succeed or
+     * neither is committed (the Cloudinary call is not transactional, but if the
+     * DB save fails the client receives an error and can retry without re-uploading,
+     * since the URL is returned in the error response).
+     *
+     * <p>Subject to the same per-user rate limit as all other uploads.
+     *
+     * @return the updated {@link UserProfileResponse} with the new avatarUrl set
+     */
+    @PatchMapping(value = "/avatar", consumes = "multipart/form-data")
+    public ResponseEntity<ApiResponse<UserProfileResponse>> uploadAvatar(
+            @RequestParam("file") MultipartFile file,
+            @AuthenticationPrincipal User currentUser) {
+
+        enforceUploadRateLimit(currentUser);
+
+        // 1. Upload to Cloudinary — stored under blog/users/{userId}/
+        String avatarUrl = mediaService.upload(file, currentUser.getId());
+        log.debug("User {} uploaded avatar image: {}", currentUser.getId(), avatarUrl);
+
+        // 2. Atomically persist the URL on the user entity
+        UserProfileResponse updated = userService.updateAvatar(currentUser, avatarUrl);
+        return ResponseEntity.ok(ApiResponse.ok(updated));
     }
 
     // ── Video upload ──────────────────────────────────────────────────────────
