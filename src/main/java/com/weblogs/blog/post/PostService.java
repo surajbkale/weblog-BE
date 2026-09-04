@@ -242,8 +242,8 @@ public class PostService {
         if (cached.isPresent()) {
             log.debug("Cache HIT: {}", cacheKey);
             PostResponse hit = cached.get();
-            // Increment view regardless of cache status
-            viewCountService.increment(UUID.fromString(hit.id().toString()));
+            // Views are now tracked client-side via PATCH /api/v1/posts/{id}/view
+            
             // Patch the user-specific liked flag
             boolean liked = currentUser != null
                     && likeRepository.existsByPostIdAndUserId(hit.id(), currentUser.getId());
@@ -273,8 +273,8 @@ public class PostService {
             return toFullResponse(post, currentUser);
         }
 
-        // Published — increment view and cache with liked=false
-        viewCountService.increment(post.getId());
+        // Published — cache with liked=false
+        // Views are tracked client-side.
         PostResponse base = toFullResponse(post, null); // liked=false for cache
         cacheService.put(cacheKey, base,
                 Duration.ofSeconds(appProperties.getCache().getPostBySlugTtlSeconds()));
@@ -291,6 +291,14 @@ public class PostService {
             }
         }
         return base;
+    }
+
+    // ── View Tracking ─────────────────────────────────────────────────────────
+
+    public void incrementView(UUID postId) {
+        // Validation: ensures post exists and is not deleted
+        requirePost(postId);
+        viewCountService.increment(postId);
     }
 
     // ── My posts ──────────────────────────────────────────────────────────────

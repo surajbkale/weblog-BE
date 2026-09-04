@@ -66,6 +66,18 @@ public class PostController {
         return ResponseEntity.ok(ApiResponse.ok(postService.unpublishPost(id, currentUser)));
     }
 
+    // ── Tracking ──────────────────────────────────────────────────────────────
+
+    /**
+     * PATCH /api/v1/posts/{id}/view
+     * Public endpoint to increment view count on the client side.
+     */
+    @PatchMapping("/{id}/view")
+    public ResponseEntity<Void> incrementView(@PathVariable UUID id) {
+        postService.incrementView(id);
+        return ResponseEntity.noContent().build();
+    }
+
     // ── Soft delete ───────────────────────────────────────────────────────────
 
     @DeleteMapping("/{id}")
