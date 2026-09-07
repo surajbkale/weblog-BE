@@ -52,7 +52,7 @@ public interface PostRepository extends JpaRepository<Post, UUID> {
                        OR p.search_vector @@ plainto_tsquery('english', CAST(:q AS TEXT)))
             ORDER BY
                 CASE WHEN :sort = 'mostLiked' THEN
-                    (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id)
+                    p.like_count         -- materialized column (V10); index: idx_posts_like_count DESC
                 END DESC NULLS LAST,
                 CASE WHEN :sort = 'relevance' AND CAST(:q AS TEXT) IS NOT NULL THEN
                     ts_rank(p.search_vector, plainto_tsquery('english', CAST(:q AS TEXT)))
