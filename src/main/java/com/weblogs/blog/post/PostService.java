@@ -15,6 +15,7 @@ import com.weblogs.blog.user.User;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -45,30 +46,51 @@ public class PostService {
 
     @Transactional
     public PostResponse createPost(CreatePostRequest request, User author) {
-        String slug = generateUniqueSlug(request.title());
-
         Set<Category> categories = resolveCategories(request.categoryIds());
         Set<Tag>      tags       = resolveOrCreateTags(request.tagNames());
 
-        Post post = Post.builder()
-                .title(request.title())
-                .slug(slug)
-                .content(request.content())
-                .excerpt(request.excerpt())
-                .coverImageUrl(request.coverImageUrl())
-                .status(PostStatus.DRAFT)
-                .author(author)
-                .categories(categories)
-                .tags(tags)
-                .build();
+        // generateUniqueSlug is a best-effort pre-check that avoids a constraint
+        // violation in the 99.9% non-concurrent case. The retry loop below is the
+        // actual safety net for the TOCTOU race: two simultaneous requests with the
+        // same title both pass the pre-check, but only one INSERT wins — the other
+        // gets a DataIntegrityViolationException and retries with a new suffix.
+        String slug = generateUniqueSlug(request.title());
 
-        post = postRepository.save(post);
+        // Retry up to 10 times on a slug collision (UniqueConstraintViolation).
+        // Each retry appends / increments a numeric suffix so we converge quickly.
+        int attempt = 0;
+        while (true) {
+            try {
+                Post post = Post.builder()
+                        .title(request.title())
+                        .slug(slug)
+                        .content(request.content())
+                        .excerpt(request.excerpt())
+                        .coverImageUrl(request.coverImageUrl())
+                        .status(PostStatus.DRAFT)
+                        .author(author)
+                        .categories(categories)
+                        .tags(tags)
+                        .build();
 
-        // A new draft doesn't appear in the public list, but evict anyway so
-        // subsequent publishes get a clean slate.
-        cacheService.evictAllPostListCaches();
+                post = postRepository.save(post);
+                // A new draft doesn't appear in the public list, but evict anyway so
+                // subsequent publishes get a clean slate.
+                cacheService.evictAllPostListCaches();
+                return toFullResponse(post, author);
 
-        return toFullResponse(post, author);
+            } catch (DataIntegrityViolationException ex) {
+                if (++attempt >= 10) {
+                    log.error("Failed to generate a unique slug for title='{}' after {} attempts",
+                            request.title(), attempt);
+                    throw ex; // Give up — something very unusual is happening
+                }
+                // Race condition: another request claimed this slug between our check
+                // and our INSERT. Generate a new suffixed candidate and retry.
+                slug = generateUniqueSlug(request.title());
+                log.debug("Slug collision on attempt {}, retrying with slug='{}'", attempt, slug);
+            }
+        }
     }
 
     // ── Update ────────────────────────────────────────────────────────────────
@@ -79,8 +101,14 @@ public class PostService {
         authorizationHelper.requireOwnerOrAdmin(post.getAuthor().getId(), currentUser);
 
         if (request.title() != null && !request.title().isBlank()) {
-            // Re-slug only if title changed
-            if (!request.title().equals(post.getTitle())) {
+            // Slug freeze policy (same as Medium / Ghost / Hashnode):
+            //   DRAFT     → re-slug freely on title change. No external links exist yet.
+            //   PUBLISHED → slug is permanently frozen. External sites, bookmarks,
+            //               search-engine indexes and RSS readers all hold a link to
+            //               the current slug. Changing it causes link rot and SEO damage.
+            //               Title edits update only the displayed title, not the URL.
+            boolean isDraft = post.getStatus() == PostStatus.DRAFT;
+            if (isDraft && !request.title().equals(post.getTitle())) {
                 post.setSlug(generateUniqueSlug(request.title()));
             }
             post.setTitle(request.title());
@@ -91,9 +119,31 @@ public class PostService {
         if (request.categoryIds()   != null) post.setCategories(resolveCategories(request.categoryIds()));
         if (request.tagNames()      != null) post.setTags(resolveOrCreateTags(request.tagNames()));
 
-        post = postRepository.save(post);
-        evictPostCaches(post.getSlug());
+        // Retry on slug collision (TOCTOU race — only reachable for drafts since
+        // published posts have a frozen slug that is already unique in the DB).
+        int attempt = 0;
+        while (true) {
+            try {
+                post = postRepository.save(post);
+                break;
+            } catch (DataIntegrityViolationException ex) {
+                if (++attempt >= 10) {
+                    log.error("Failed to save post id={} with unique slug after {} attempts",
+                            postId, attempt);
+                    throw ex;
+                }
+                // Only drafts ever reach here (published slugs are frozen and unique).
+                if (request.title() != null) {
+                    post.setSlug(generateUniqueSlug(request.title()));
+                    log.debug("Slug collision on update attempt {}, retrying with slug='{}'",
+                            attempt, post.getSlug());
+                } else {
+                    throw ex; // collision on a non-title field — unexpected, surface immediately
+                }
+            }
+        }
 
+        evictPostCaches(post.getSlug());
         return toFullResponse(post, currentUser);
     }
 
@@ -136,6 +186,72 @@ public class PostService {
         post.setDeleted(true);
         postRepository.save(post);
         evictPostCaches(post.getSlug());
+    }
+
+    // ── Author post list (dedicated, always cacheable) ───────────────────────
+
+    /**
+     * Returns a paginated list of published posts by a specific author.
+     *
+     * <p>Unlike {@link #getPublicList}, this method is <b>always cached</b> regardless
+     * of authentication state, because author-profile pages do not display per-user
+     * {@code likedByCurrentUser} state. The cached response is user-agnostic and safe
+     * to serve to any caller.
+     *
+     * <p>Cache key: {@code user:posts:{authorId}:{sort}:{page}:{size}} — TTL matches
+     * the global post-list TTL. The cache is automatically evicted whenever the author
+     * publishes, updates, or deletes a post via {@link #evictPostCaches}.
+     *
+     * @param authorId the author's UUID
+     * @param sort     sort order — "newest" (default), "oldest", "popular"
+     * @param pageable pagination parameters
+     */
+    @Transactional(readOnly = true)
+    public PaginatedResponse<PostListItemResponse> getAuthorPosts(
+            UUID authorId, String sort, Pageable pageable) {
+
+        String normalizedSort = switch (sort == null ? "newest" : sort.toLowerCase()) {
+            case "popular", "mostliked" -> "mostLiked";
+            case "oldest"               -> "oldest";
+            default                     -> "newest";
+        };
+
+        String cacheKey = CacheService.AUTHOR_POSTS_PREFIX
+                + authorId + ":"
+                + normalizedSort + ":"
+                + pageable.getPageNumber() + ":"
+                + pageable.getPageSize();
+
+        Optional<PaginatedResponse<PostListItemResponse>> cached = cacheService.get(cacheKey);
+        if (cached.isPresent()) {
+            log.debug("Cache HIT: {}", cacheKey);
+            return cached.get();
+        }
+        log.debug("Cache MISS: {}", cacheKey);
+
+        Page<Post> page = postRepository.findPublished(
+                null,                  // categorySlug — not filtered
+                null,                  // tagSlug      — not filtered
+                authorId.toString(),
+                null,                  // q            — no search
+                normalizedSort,
+                pageable
+        );
+
+        // No likedByCurrentUser needed for author profile pages — pass null for perf
+        List<PostListItemResponse> items = batchMapListItems(page.getContent(), null);
+        PaginatedResponse<PostListItemResponse> result = new PaginatedResponse<>(
+                items,
+                page.getNumber(),
+                page.getSize(),
+                page.getTotalElements(),
+                page.getTotalPages(),
+                page.isLast()
+        );
+
+        cacheService.putListCache(cacheKey, result,
+                Duration.ofSeconds(appProperties.getCache().getPostListTtlSeconds()));
+        return result;
     }
 
     // ── Public list ───────────────────────────────────────────────────────────
@@ -229,9 +345,21 @@ public class PostService {
      * Returns the post if it is published. If it is a draft, only the author may view it;
      * anyone else gets a 404 (no 403 — don't leak draft existence).
      *
-     * <p>Caching: published posts are cached by slug (TTL 10 min) with
-     * {@code likedByCurrentUser = false}. On cache hit, the liked flag is patched via
-     * a single DB lookup if the caller is authenticated.
+     * <h3>Caching contract — {@code likedByCurrentUser} invariant</h3>
+     * <p>The cached {@link PostResponse} <em>always</em> stores {@code likedByCurrentUser = false},
+     * regardless of who triggered the cache population. This is intentional:
+     * <ul>
+     *   <li>The {@code liked} flag is <strong>user-specific state</strong>. Caching a
+     *       {@code true} value would incorrectly serve it to every subsequent caller,
+     *       including unauthenticated users and users who have not liked the post.</li>
+     *   <li>After every cache retrieval (hit <em>or</em> miss), the liked flag is
+     *       <strong>always patched</strong> via a single {@code EXISTS} DB lookup keyed
+     *       on {@code (postId, userId)} before returning the response to the caller.</li>
+     *   <li>Unauthenticated callers bypass the patch entirely and receive
+     *       {@code likedByCurrentUser = false} directly from the cache.</li>
+     * </ul>
+     * <p>This design keeps the cache shareable across all users while still serving
+     * per-user accuracy at the cost of exactly one extra query per authenticated request.
      */
     @Transactional(readOnly = true)
     public PostResponse getBySlug(String slug, User currentUser) {
@@ -242,13 +370,15 @@ public class PostService {
         if (cached.isPresent()) {
             log.debug("Cache HIT: {}", cacheKey);
             PostResponse hit = cached.get();
-            // Views are now tracked client-side via PATCH /api/v1/posts/{id}/view
-            
-            // Patch the user-specific liked flag
+
+            // The cached entry always has likedByCurrentUser=false (see class javadoc).
+            // Patch the per-user liked flag here before returning.
+            // For unauthenticated callers this is always false — no DB hit.
             boolean liked = currentUser != null
                     && likeRepository.existsByPostIdAndUserId(hit.id(), currentUser.getId());
             if (liked != hit.likedByCurrentUser()) {
-                // Return a new record instance with corrected liked state
+                // liked is true but the cached entry has false — reconstruct with correct flag.
+                // We never reach here for unauthenticated callers (liked is always false).
                 return new PostResponse(hit.id(), hit.title(), hit.slug(), hit.content(),
                         hit.excerpt(), hit.coverImageUrl(), hit.status(), hit.author(),
                         hit.categories(), hit.tags(), hit.likeCount(), hit.commentCount(),
@@ -273,13 +403,17 @@ public class PostService {
             return toFullResponse(post, currentUser);
         }
 
-        // Published — cache with liked=false
-        // Views are tracked client-side.
-        PostResponse base = toFullResponse(post, null); // liked=false for cache
+        // Published — build the base response with liked=false and store it in cache.
+        // IMPORTANT: we deliberately pass null as currentUser so toFullResponse produces
+        // liked=false. This is the cache invariant: the cached entry is always
+        // user-agnostic. Per-user liked state is resolved AFTER cache retrieval, never before.
+        // See the method javadoc for a full explanation.
+        PostResponse base = toFullResponse(post, null);
         cacheService.put(cacheKey, base,
                 Duration.ofSeconds(appProperties.getCache().getPostBySlugTtlSeconds()));
 
-        // Patch liked for the current caller if authenticated
+        // Patch liked flag for the current caller if authenticated.
+        // The cached entry (base) remains liked=false — only the returned value is patched.
         if (currentUser != null) {
             boolean liked = likeRepository.existsByPostIdAndUserId(post.getId(), currentUser.getId());
             if (liked) {
@@ -295,9 +429,26 @@ public class PostService {
 
     // ── View Tracking ─────────────────────────────────────────────────────────
 
+    /**
+     * Increments the view counter for a post.
+     *
+     * <p>This endpoint is unauthenticated and public, so we apply two guards:
+     * <ol>
+     *   <li>{@code deleted = false} — enforced by {@link #requirePost}.</li>
+     *   <li>{@code status = PUBLISHED} — drafts must never accumulate views via
+     *       this path; an author previewing their own draft should not inflate
+     *       the count, and an attacker knowing the UUID of a draft must not
+     *       be able to touch it.</li>
+     * </ol>
+     * If either condition is not met the call is silently ignored (no error
+     * is returned so the client doesn't know whether the post exists).
+     */
     public void incrementView(UUID postId) {
-        // Validation: ensures post exists and is not deleted
-        requirePost(postId);
+        Post post = requirePost(postId);
+        if (post.getStatus() != PostStatus.PUBLISHED) {
+            // Draft or archived — silently no-op. No error: don't reveal existence.
+            return;
+        }
         viewCountService.increment(postId);
     }
 
@@ -407,7 +558,14 @@ public class PostService {
 
     /**
      * Generates a URL-safe slug from the title.
-     * On collision appends {@code -2}, {@code -3}, ... until unique.
+     *
+     * <p>This is a <em>best-effort heuristic</em> — it eliminates collisions in
+     * the common case (non-concurrent saves) by probing the DB and incrementing a
+     * numeric suffix. It is NOT a guarantee of uniqueness under concurrent load;
+     * callers ({@link #createPost}, {@link #updatePost}) must wrap {@code save()}
+     * in a retry loop that catches {@link DataIntegrityViolationException}.
+     *
+     * <p>On collision appends {@code -2}, {@code -3}, ... until the probe succeeds.
      */
     String generateUniqueSlug(String title) {
         String base = title.strip()
@@ -420,7 +578,7 @@ public class PostService {
         if (!postRepository.existsBySlug(base)) {
             return base;
         }
-        // Strip any existing numeric suffix before appending
+        // Strip any existing numeric suffix before appending a new one
         Pattern suffixPattern = Pattern.compile("^(.+)-\\d+$");
         var matcher = suffixPattern.matcher(base);
         String root = matcher.matches() ? matcher.group(1) : base;
@@ -454,8 +612,11 @@ public class PostService {
         boolean newTagCreated = false;
         for (String rawName : tagNames) {
             String name = rawName.strip();
-            boolean existed = tagRepository.findByName(name).isPresent();
-            Tag tag = tagRepository.findByName(name).orElseGet(() -> {
+            // Single DB hit: capture the Optional once and reuse it for both
+            // the existence check and the fallback create path.
+            Optional<Tag> existing = tagRepository.findByName(name);
+            boolean existed = existing.isPresent();
+            Tag tag = existing.orElseGet(() -> {
                 String slug = name.toLowerCase()
                         .replaceAll("[^a-z0-9\\s-]", "")
                         .replaceAll("[\\s]+", "-");
@@ -473,7 +634,9 @@ public class PostService {
     }
 
     private PostResponse toFullResponse(Post post, User currentUser) {
-        long likeCount    = postRepository.countLikesByPostId(post.getId());
+        // like_count is a materialized column maintained by the V10 DB trigger.
+        // Reading it from the entity avoids an extra COUNT(*) query per post view.
+        long likeCount    = post.getLikeCount();
         long commentCount = postRepository.countCommentsByPostId(post.getId());
         boolean liked     = currentUser != null
                 && likeRepository.existsByPostIdAndUserId(post.getId(), currentUser.getId());
@@ -481,8 +644,10 @@ public class PostService {
     }
 
     /**
-     * H-1 fix: Batch-maps a list of posts to DTOs using 3 queries total regardless
-     * of list size — one for like counts, one for comment counts, one for liked IDs.
+     * H-1 fix: Batch-maps a list of posts to DTOs using 2 queries total regardless
+     * of list size — one for comment counts, one for liked post IDs.
+     * Like counts are read from the materialized {@code like_count} column on each
+     * {@link Post} entity (maintained by the V10 DB trigger) — no extra query needed.
      * This replaces the old {@code toListItemResponse} which fired 3 queries per post.
      */
     private List<PostListItemResponse> batchMapListItems(List<Post> posts, User currentUser) {
@@ -490,24 +655,22 @@ public class PostService {
 
         List<UUID> postIds = posts.stream().map(Post::getId).toList();
 
-        // Query 1: like counts for all posts
-        Map<UUID, Long> likeCounts = new HashMap<>();
-        postRepository.findLikeCountsByPostIds(postIds)
-                .forEach(row -> likeCounts.put((UUID) row[0], (Long) row[1]));
+        // Like counts come directly from the materialized posts.like_count column (V10).
+        // The DB trigger keeps it consistent on every like insert/delete — no extra query needed.
 
-        // Query 2: comment counts for all posts
+        // Query 1: comment counts for all posts in a single GROUP BY query
         Map<UUID, Long> commentCounts = new HashMap<>();
         postRepository.findCommentCountsByPostIds(postIds)
                 .forEach(row -> commentCounts.put((UUID) row[0], (Long) row[1]));
 
-        // Query 3: which posts the current user has liked (empty set for anonymous)
+        // Query 2: which posts the current user has liked (empty set for anonymous)
         Set<UUID> likedPostIds = currentUser == null
                 ? Set.of()
                 : new HashSet<>(postRepository.findLikedPostIds(currentUser.getId(), postIds));
 
         return posts.stream().map(post -> PostListItemResponse.from(
                 post,
-                likeCounts.getOrDefault(post.getId(), 0L),
+                post.getLikeCount(),   // materialized column — no extra query
                 commentCounts.getOrDefault(post.getId(), 0L),
                 likedPostIds.contains(post.getId())
         )).toList();

@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.UUID;
 
 @RestController
+@RequestMapping("/api/v1")
 @RequiredArgsConstructor
 public class CommentController {
 
@@ -24,7 +25,7 @@ public class CommentController {
 
     // ── Add comment ───────────────────────────────────────────────────────────
 
-    @PostMapping("/api/v1/posts/{postId}/comments")
+    @PostMapping("/posts/{postId}/comments")
     public ResponseEntity<ApiResponse<CommentResponse>> addComment(
             @PathVariable UUID postId,
             @Valid @RequestBody CommentRequest request,
@@ -36,7 +37,7 @@ public class CommentController {
 
     // ── List comments for post (public) ───────────────────────────────────────
 
-    @GetMapping("/api/v1/posts/{postId}/comments")
+    @GetMapping("/posts/{postId}/comments")
     public ResponseEntity<ApiResponse<PaginatedResponse<CommentResponse>>> listComments(
             @PathVariable UUID postId,
             @RequestParam(defaultValue = "0")  int page,
@@ -48,7 +49,7 @@ public class CommentController {
 
     // ── Edit comment ──────────────────────────────────────────────────────────
 
-    @PutMapping("/api/v1/comments/{id}")
+    @PutMapping("/comments/{id}")
     public ResponseEntity<ApiResponse<CommentResponse>> editComment(
             @PathVariable UUID id,
             @Valid @RequestBody CommentRequest request,
@@ -59,7 +60,7 @@ public class CommentController {
 
     // ── Delete comment ────────────────────────────────────────────────────────
 
-    @DeleteMapping("/api/v1/comments/{id}")
+    @DeleteMapping("/comments/{id}")
     public ResponseEntity<ApiResponse<Void>> deleteComment(
             @PathVariable UUID id,
             @AuthenticationPrincipal User currentUser) {
@@ -79,7 +80,7 @@ public class CommentController {
      * Soft-deleted replies are included so the frontend can render "[deleted]" stubs
      * and keep thread depth/ordering intact.
      */
-    @GetMapping("/api/v1/comments/{id}/replies")
+    @GetMapping("/comments/{id}/replies")
     public ResponseEntity<ApiResponse<PaginatedResponse<CommentResponse>>> listReplies(
             @PathVariable UUID id,
             @RequestParam(defaultValue = "0")  int page,

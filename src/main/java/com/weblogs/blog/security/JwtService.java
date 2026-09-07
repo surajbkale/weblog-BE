@@ -5,6 +5,7 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.io.Decoders;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -23,9 +24,16 @@ public class JwtService {
     @Value("${jwt.access-token-expiry}")
     private Duration accessTokenExpiry;
 
-    private SecretKey getSigningKey() {
-        byte[] keyBytes = Decoders.BASE64.decode(secret);
-        return Keys.hmacShaKeyFor(keyBytes);
+    /**
+     * Cached signing key. Decoded once at startup from the Base64 {@code jwt.secret}
+     * property and reused for every token generation and validation call.
+     * Re-creating it per-call (decode + HMAC key derivation) is wasteful under load.
+     */
+    private SecretKey signingKey;
+
+    @PostConstruct
+    private void initSigningKey() {
+        this.signingKey = Keys.hmacShaKeyFor(Decoders.BASE64.decode(secret));
     }
 
     public String generateAccessToken(User user) {
@@ -35,11 +43,11 @@ public class JwtService {
                 .claim("email", user.getEmail())
                 .claim("role", user.getRole().name())
                 .claim("displayName", user.getDisplayName())
-                .claim("active", user.isActive())          // H-5: no DB hit in filter
-                .claim("emailVerified", user.isEmailVerified()) // H-5: prevent hardcode
+                .claim("active", user.isActive())
+                .claim("emailVerified", user.isEmailVerified())
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(now.plus(accessTokenExpiry)))
-                .signWith(getSigningKey())
+                .signWith(signingKey)
                 .compact();
     }
 
@@ -49,7 +57,7 @@ public class JwtService {
      */
     public Claims validateAndExtractClaims(String token) {
         return Jwts.parser()
-                .verifyWith(getSigningKey())
+                .verifyWith(signingKey)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
